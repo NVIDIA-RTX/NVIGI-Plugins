@@ -1,0 +1,27 @@
+{
+    "name" : "minitron-v1-instruct_q4_0",
+    "vram" : 0,    
+    "url": "https://integrate.api.nvidia.com/v1/chat/completions",
+    "request_body":
+    {
+       "model": "nvidia/nemotron-mini-4b-instruct",
+       "messages": [
+        {
+            "role": "system",
+            "content": "$system"
+        },
+        {
+            "role": "user",
+            "content": "$user"
+        },
+        {
+            "role": "assistant",
+            "content": "$assistant"
+        }
+    ],
+    "temperature": 0.2,
+    "top_p": 0.7,
+    "max_tokens": 1024,
+    "stream": false
+    }         
+}

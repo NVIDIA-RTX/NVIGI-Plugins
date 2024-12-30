@@ -1,0 +1,13 @@
+*.bat text eol=crlf
+*.sh text eol=lf
+tools/packman/packman text eol=lf
+docs/tools/packman/packman text eol=lf
+*.dll filter=lfs diff=lfs merge=lfs -text
+*.png filter=lfs diff=lfs merge=lfs -text
+*.pdb filter=lfs diff=lfs merge=lfs -text
+*.pdf filter=lfs diff=lfs merge=lfs -text
+*.lib filter=lfs diff=lfs merge=lfs -text
+*.exe filter=lfs diff=lfs merge=lfs -text
+*.zip filter=lfs diff=lfs merge=lfs -text
+*.wav filter=lfs diff=lfs merge=lfs -text
+external/cudaScg/nvapi.h filter=lfs diff=lfs merge=lfs -text

@@ -1,0 +1,44 @@
+# Generated build directories and artifacts
+_project/
+_artifacts/
+_sdk/
+docs/_*/
+/coresdk
+
+# Premake
+tools/premake5
+tools/python
+
+# Editor configuration
+.vs/
+.vscode/**
+
+# External dependencies pulled by packman
+external/*
+!external/nvngxota
+
+# APS files
+**/*.aps
+
+# Stored credentials for GTL upload
+credentials.txt
+
+# Other miscellaneous files (deprecated?)
+docs/pages/*
+copy.bat
+mr.bat
+fb.bat
+update.bat
+
+# Docker
+docker/bin
+docker/cuda
+docker/nvigi.models
+llama.log
+
+# automatically generated folders
+docs/_*/
+
+
+/nvigi_core
+
