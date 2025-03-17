@@ -1,0 +1,24 @@
+{
+  "name": "Nemovision 4B Instruct FP16",
+  "vram": 4000,
+  "n_layers": 33,
+  "weights": "minitron.gguf",
+  "mmproj_weights": "mmproj-model-f16.gguf",
+  "model": {
+    "notes": "Must be obtained from NGC. Please make sure to unzip any archives before using the model."
+  },
+  "prompt_template": [
+    "<extra_id_0>System\n",
+    "$system",
+    "\n\n",
+    "<extra_id_1>User\n",
+    "$user",
+    "\n<extra_id_1>Assistant\n",
+    "$assistant"
+  ],
+  "turn_template": [
+    "\n<extra_id_1>User\n",
+    "$user",
+    "\n<extra_id_1>Assistant\n"
+  ]
+}

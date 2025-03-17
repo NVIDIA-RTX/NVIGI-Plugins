@@ -5,7 +5,7 @@ The focus of this guide is on using In-Game Inferencing to integrate an embeddin
 
 > **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the [rag sample](../source/samples/nvigi.rag/rag.cpp)
 
-## Version 1.0.0 General Access
+## Version 1.1.0 General Access
 
 ## 1.0 INITIALIZE AND SHUTDOWN
 
@@ -37,7 +37,9 @@ One can only obtain interface for a feature which is available on user system. I
 
 ## 3.0 CREATE EMBED INSTANCE(S)
 
-Now that we have our interface we can use it to create our EMBED instance. To do this, we need to provide information about Embedding model we want to use, CPU/GPU resources which are available and various other creation parameters.   **NOTE** only the local inference plugins are provided/supported in this early release.  The cloud plugins will be added in a later release.
+Now that we have our interface we can use it to create our EMBED instance. To do this, we need to provide information about Embedding model we want to use, CPU/GPU resources which are available and various other creation parameters.   
+
+> **NOTE** only the local inference plugins are provided/supported in this early release.  The cloud plugins will be added in a later release.
 
 Here is an example:
 
@@ -141,7 +143,7 @@ nvigi::InferenceInstance* embedInstanceCloud;
 > **NOTE:**
 > NVIGI model repository is provided with the pack in nvigi.models.
 
-## 5.0 SETUP CALLBACK TO RECEIVE INFERRED DATA
+## 4.0 SETUP CALLBACK TO RECEIVE INFERRED DATA
 
 In order to receive transcribed text from the Embedding model inference a special callback needs to be setup like this:
 
@@ -171,7 +173,7 @@ nvigi::InferenceExecutionState embedOnComplete(const nvigi::InferenceExecutionCo
 > **NOTE:**
 > To cancel EMBED inference make sure to return `nvigi::InferenceExecutionStateCancel` state in the callback.
 
-## 6.0 PREPARE THE EXECUTION CONTEXT AND EXECUTE INFERENCE
+## 5.0 PREPARE THE EXECUTION CONTEXT AND EXECUTE INFERENCE
 
 Before EMBED can be evaluated the `nvigi::InferenceExecutionContext` needs to be defined. Among other things, this includes specifying input and output slots.
 
@@ -185,17 +187,13 @@ output_embeddings.clear();
 
 output_embeddings.resize(n_prompts*embedding_size);
 
-nvigi::CpuData text(input.length() + 1, (void*)input.c_str());
-nvigi::InferenceDataText input_prompt(text);
-std::vector<nvigi::InferenceDataSlot> inSlots = { {nvigi::kEmbedDataSlotInText, &input_prompt} };
+nvigi::InferenceDataTextSTLHelper input_prompt(input);
+std::vector<nvigi::InferenceDataSlot> inSlots = { {nvigi::kEmbedDataSlotInText, input_prompt} };
 InferenceDataSlotArray inputs = { inSlots.size(), inSlots.data() };
 
 // If the output slots are not provided, NVIGI will allocate them. Alternatively, host can allocate and provide outputs as shown in the next lines
-nvigi::CpuData cpu_data;
-cpu_data.sizeInBytes = output_embeddings.size() * sizeof(float);
-cpu_data.buffer = output_embeddings.data();
-nvigi::InferenceDataByteArray output_param(cpu_data);
-std::vector<nvigi::InferenceDataSlot> outSlots = { {nvigi::kEmbedDataSlotOutEmbedding, &output_param} };
+nvigi::InferenceDataByteArraySTLHelper output_param(output_embeddings);
+std::vector<nvigi::InferenceDataSlot> outSlots = { {nvigi::kEmbedDataSlotOutEmbedding, output_param} };
 InferenceDataSlotArray outputs = { outSlots.size(), outSlots.data() };
 
 nvigi::InferenceExecutionContext embedContext{};
@@ -219,11 +217,11 @@ while (!embed_done && res == nvigi::ResultOk)
 > **IMPORTANT:**
 > The execution context and all provided data (input, output slots) must be valid at the time `instance->evaluate` is called
 
-## 7.0 Do something with the embedding
+## 6.0 Do something with the embedding
 
 In your execution pipeline, call `instance->evaluate` at the appropriate location where a prompt needs to be processed to receive a response from the EMBED.
 
-### 7.1 Use it to match a player's answer to a set of predefined answers.
+### 6.1 Use it to match a player's answer to a set of predefined answers.
 Imagine we are in a game where the player is asked a question. The game has a set of predefined answers, but we want to allow the player to respond freely. To match the player's response with the closest predefined answer, we can use embeddings to analyze and compare the answers.
 
 Let's suppose the game asks this question : 
@@ -304,7 +302,7 @@ std:: cout << "The player has choosen the answer : " << predefined_answers[max_s
 > **IMPORTANT:**
 > The host app CANNOT assume that the inference callback will be invoked on the thread that calls `instance->evaluate`. In addition, inference (and thus callback invocations) is NOT guaranteed to be done when `instance->evaluate` returns.
 
-## 8.0 DESTROY INSTANCE(S)
+## 7.0 DESTROY INSTANCE(S)
 
 Once EMBED is no longer needed each instance should be destroyed like this:
 
@@ -320,7 +318,7 @@ if(NVIGI_FAILED(res, iembedCloud.destroyInstance(embedInstanceCloud)))
 } 
 ```
 
-## 9.0 UNLOAD INTERFACE(S)
+## 8.0 UNLOAD INTERFACE(S)
 
 Once EMBED is no longer needed each interface should be unloaded like this:
 
@@ -338,7 +336,7 @@ if(NVIGI_FAILED(result, nvigiUnloadInterface(nvigi::plugin::embed::ggml::cuda::k
 } 
 ```
 
-## 10.0 Exceptions
+## 9.0 Exceptions
 
 > **IMPORTANT:**
 > During the evalutions some errors can happen. In this case the Result of ctx.instance->evaluate(&ctx) will not be nvigi::ResultOk

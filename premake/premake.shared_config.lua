@@ -30,6 +30,32 @@
 		local winSDK = os.winSdkVersion() .. ".0"
 		print("WinSDK", winSDK)
 		systemversion(winSDK)
+
+		local function getVSInstallPath()
+			local vswhere = os.getenv("ProgramFiles(x86)") .. "/Microsoft Visual Studio/Installer/vswhere.exe"
+			local command = string.format('"%s" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath', vswhere)
+			return os.outputof(command)
+		end
+		
+		local vsInstallPath = getVSInstallPath()
+
+		local function getVCToolsVersion(vsInstallPath)
+			local versionFile = vsInstallPath .. "/VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt"
+			local f = io.open(versionFile, "r")
+			if f then
+				local version = f:read("*all"):match("(%d+%.%d+%.%d+)")
+				f:close()
+				return version
+			end
+			return nil
+		end
+		
+		local toolsVersion = getVCToolsVersion(vsInstallPath)
+		if toolsVersion then
+			print("MS Toolchain Version: " .. toolsVersion)
+		else
+			print("Failed to detect MS Toolchain Version")
+		end		
 	end
 	
 	-- DO NOT REMOVE, required for security --
@@ -53,6 +79,13 @@
 		buildoptions {"-std=c++2b", "-Wfatal-errors","-fPIC", "-Wall", "-Wextra" , "-Wpedantic", "-Wcast-qual", "-Wdouble-promotion",
 				      "-Wshadow",  "-Wpointer-arith", "-pthread", "-march=native", "-mtune=native", "-fvisibility=hidden","-finput-charset=UTF-8", "-fexec-charset=UTF-8"}					  
         linkoptions { "-Wl,--no-undefined" }
+		-- Plug-ins should try to isolate themselves as much as possible from the environment.
+		-- Using -Bsymbolic makes sure the plug-in will use symbols defined by the (static)
+		-- libraries it uses.
+		-- --exclude-libs,ALL will make sure symbols from static libraries are not weak symbols
+		-- which can be overridden at run time.  Using linker scripts would be another way
+		-- to get full control over this.
+		linkoptions { "-Bsymbolic", "-Wl,--exclude-libs,ALL" }
     filter { "files:**.cpp", "system:linux"}
     	buildoptions {"-fpermissive","-Wstrict-prototypes","-Wmissing-prototypes"}
 	-- when building any visual studio project

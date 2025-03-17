@@ -260,17 +260,17 @@ nvigi::Result aipEvaluate(nvigi::InferenceExecutionContext* execCtx)
             if (id == InferenceDataText::s_type)
             {
                 textData.push_back(new InferenceDataText(*cpuBuffers.back()));
-                inSlots.push_back({ key.c_str(), textData.back() });
+                inSlots.push_back({ key.c_str(), *textData.back() });
             }
             else if (id == InferenceDataAudio::s_type)
             {
                 audioData.push_back(new InferenceDataAudio(*cpuBuffers.back()));
-                inSlots.push_back({ key.c_str(), audioData.back() });
+                inSlots.push_back({ key.c_str(), *audioData.back() });
             }
             else if (id == InferenceDataByteArray::s_type)
             {
                 byteData.push_back(new InferenceDataByteArray(*cpuBuffers.back()));
-                inSlots.push_back({ key.c_str(), byteData.back() });
+                inSlots.push_back({ key.c_str(), *byteData.back() });
             }
             else
             {

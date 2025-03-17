@@ -29,6 +29,7 @@ namespace fs = std::filesystem;
 #include "nvigi_asr_whisper.h"
 #include "nvigi_gpt.h"
 #include "nvigi_types.h"
+#include <nvigi_stl_helpers.h>
 
 #if NVIGI_LINUX
 #include <unistd.h>
@@ -51,19 +52,19 @@ typedef struct __LUID
 #endif
 
 #define DECLARE_NVIGI_CORE_FUN(F) PFun_##F* ptr_##F
-#define GET_NVIGI_CORE_FUN(F) ptr_##F = (PFun_##F*)GetProcAddress(lib, #F)
+#define GET_NVIGI_CORE_FUN(lib, F) ptr_##F = (PFun_##F*)GetProcAddress(lib, #F)
 DECLARE_NVIGI_CORE_FUN(nvigiInit);
 DECLARE_NVIGI_CORE_FUN(nvigiShutdown);
 DECLARE_NVIGI_CORE_FUN(nvigiLoadInterface);
 DECLARE_NVIGI_CORE_FUN(nvigiUnloadInterface);
 
-inline std::vector<uint8_t> read(const char* fname)
+inline std::vector<int16_t> read(const char* fname)
 {
     try
     {
         fs::path p(fname);
         size_t file_size = fs::file_size(p);
-        std::vector<uint8_t> ret_buffer(file_size);
+        std::vector<int16_t> ret_buffer(file_size/2);
 #ifdef NVIGI_LINUX
         std::fstream file(fname, std::ios::binary | std::ios::in);
 #else
@@ -103,28 +104,263 @@ void loggingCallback(nvigi::LogType type, const char* msg)
     std::cout << msg;
 }
 
-template<typename T>
-bool unloadInterface(nvigi::PluginID feature, T*& _interface)
+struct NVIGIAppCtx
 {
-    if (_interface == nullptr)
-        return false;
+    HMODULE coreLib{};
+    nvigi::aip::IAiPipeline* iaip{};
+    nvigi::InferenceInstance* pipelineInst{};
 
-    nvigi::Result result = ptr_nvigiUnloadInterface(feature, _interface);
-    if (result == nvigi::kResultOk)
+    std::vector<nvigi::PluginID> stages{};
+
+    std::string asrOutput{};
+    std::string gptOutput{};
+    std::string a2fOutput{};
+};
+
+constexpr uint32_t n_threads = 16;
+
+///////////////////////////////////////
+//! NVIGI Init and Shutdown
+
+int InitNVIGI(NVIGIAppCtx& nvigiCtx, const std::string& pathToSDKUtf8)
+{
+#ifdef NVIGI_WINDOWS
+    auto libPath = pathToSDKUtf8 + "/nvigi.core.framework.dll";
+#else
+    auto libPath = pathToSDKUtf8 + "/nvigi.core.framework.so";
+#endif
+    nvigiCtx.coreLib = LoadLibraryA(libPath.c_str());
+    if (nvigiCtx.coreLib == nullptr)
     {
-        _interface = nullptr;
+        loggingCallback(nvigi::LogType::eError, "Could not load NVIGI core library");
+        return -1;
+    }
+
+    GET_NVIGI_CORE_FUN(nvigiCtx.coreLib, nvigiInit);
+    GET_NVIGI_CORE_FUN(nvigiCtx.coreLib, nvigiShutdown);
+    GET_NVIGI_CORE_FUN(nvigiCtx.coreLib, nvigiLoadInterface);
+    GET_NVIGI_CORE_FUN(nvigiCtx.coreLib, nvigiUnloadInterface);
+
+    if (ptr_nvigiInit == nullptr || ptr_nvigiShutdown == nullptr ||
+        ptr_nvigiLoadInterface == nullptr || ptr_nvigiUnloadInterface == nullptr)
+    {
+        loggingCallback(nvigi::LogType::eError, "Could not load NVIGI core library");
+        return -1;
+    }
+
+    const char* paths[] =
+    {
+        pathToSDKUtf8.c_str()
+    };
+
+    nvigi::Preferences pref{};
+    pref.logLevel = nvigi::LogLevel::eVerbose;
+    pref.showConsole = true;
+    pref.numPathsToPlugins = 1;
+    pref.utf8PathsToPlugins = paths;
+    pref.logMessageCallback = pref.showConsole ? (nvigi::PFun_LogMessageCallback*)nullptr : loggingCallback; // avoid duplicating logs in the console
+    pref.utf8PathToLogsAndData = pathToSDKUtf8.c_str();
+
+    if (NVIGI_FAILED(result, ptr_nvigiInit(pref, nullptr, nvigi::kSDKVersion)))
+    {
+        loggingCallback(nvigi::LogType::eError, "NVIGI init failed");
+        return -1;
+    }
+
+    return 0;
+}
+
+int ShutdownNVIGI(NVIGIAppCtx& nvigiCtx)
+{
+    if (NVIGI_FAILED(result, ptr_nvigiShutdown()))
+    {
+        loggingCallback(nvigi::LogType::eError, "Error in 'nvigiShutdown'");
+        return -1;
+    }
+
+    FreeLibrary(nvigiCtx.coreLib);
+
+    return 0;
+}
+
+int CreatePipeline(NVIGIAppCtx& nvigiCtx, const std::string& modelDir, size_t vram)
+{
+    //! AIP
+    if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigi::plugin::ai::pipeline::kId, &nvigiCtx.iaip, ptr_nvigiLoadInterface)))
+    {
+        loggingCallback(nvigi::LogType::eError, "'nvigiGetInterface' failed");
+        return -1;
+    }
+
+    //! ASR
+    nvigi::ASRWhisperCreationParameters asrParams{};
+    nvigi::CommonCreationParameters asrCommon{};
+    {
+        asrCommon.utf8PathToModels = modelDir.c_str();
+        asrCommon.numThreads = n_threads;
+        asrCommon.vramBudgetMB = vram;
+        asrCommon.modelGUID = "{5CAD3A03-1272-4D43-9F3D-655417526170}";
+        if (NVIGI_FAILED(result, asrCommon.chain(asrParams)))
+        {
+            loggingCallback(nvigi::LogType::eError, "ASR param chaining failed");
+            return -1;
+        }
+    }
+
+    //! GPT
+    nvigi::GPTCreationParameters gptParams{};
+    nvigi::CommonCreationParameters gptCommon{};
+    {
+        //! 
+        //! Here we provide an example local vs cloud, same pattern applies to any other stage
+        //! 
+
+        gptCommon.utf8PathToModels = modelDir.c_str();
+        gptCommon.numThreads = n_threads;
+        gptCommon.vramBudgetMB = vram;
+
+        //! Model is the same regardless of the backend
+        gptCommon.modelGUID = "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}";
+        if (NVIGI_FAILED(result, gptCommon.chain(gptParams)))
+        {
+            loggingCallback(nvigi::LogType::eError, "GPT param chaining failed");
+            return -1;
+        }
+    }
+
+    std::vector<const nvigi::NVIGIParameter*> stageParams = { asrCommon, gptCommon };
+    nvigiCtx.stages =
+    {
+        nvigi::plugin::asr::ggml::cuda::kId,
+        nvigi::plugin::gpt::ggml::cuda::kId
+    };
+
+    //! Creation parameters for the pipeline
+    nvigi::aip::AiPipelineCreationParameters aipParams{};
+
+    aipParams.numStages = nvigiCtx.stages.size();
+    aipParams.stages = nvigiCtx.stages.data();
+    aipParams.stageParams = stageParams.data();
+
+    //! Create pipeline instance
+    if (NVIGI_FAILED(result, nvigiCtx.iaip->createInstance(aipParams, &nvigiCtx.pipelineInst)))
+    {
+        loggingCallback(nvigi::LogType::eError, "Error creating pipeline plugin instance");
+        return -1;
+    }
+
+    return 0;
+}
+
+int ReleasePipeline(NVIGIAppCtx& nvigiCtx)
+{
+    if (NVIGI_FAILED(result, nvigiCtx.iaip->destroyInstance(nvigiCtx.pipelineInst)))
+    {
+        loggingCallback(nvigi::LogType::eError, "Error destroying pipeline instance");
+        return -1;
+    }
+
+    if (NVIGI_FAILED(result, ptr_nvigiUnloadInterface(nvigi::plugin::ai::pipeline::kId, nvigiCtx.iaip)))
+    {
+        loggingCallback(nvigi::LogType::eError, "Error unloading pipeline interface");
+        return -1;
+    }
+
+    return 0;
+}
+
+
+nvigi::InferenceExecutionState ASRCallback(const nvigi::InferenceExecutionContext* ctx, nvigi::InferenceExecutionState state, NVIGIAppCtx& appCtx)
+{
+    // Outputs from ASR
+    auto slots = ctx->outputs;
+    const nvigi::InferenceDataText* text{};
+    slots->findAndValidateSlot(nvigi::kASRWhisperDataSlotTranscribedText, &text);
+    auto response = std::string(text->getUTF8Text());
+    if (response.find("<JSON>") != std::string::npos)
+    {
+        std::string text = "asr stats:" + response + "\n";
+        loggingCallback(nvigi::LogType::eInfo, text.c_str());
     }
     else
     {
-        loggingCallback(nvigi::LogType::eError, "Failed to unload interface");
-        return false;
+        appCtx.asrOutput += response;
+    }
+    if (state == nvigi::kInferenceExecutionStateDone)
+    {
+        std::string text = "asr output:" + appCtx.asrOutput + "\n";
+        loggingCallback(nvigi::LogType::eInfo, text.c_str());
     }
 
-    return true;
+    return state;
+}
+
+nvigi::InferenceExecutionState GPTCallback(const nvigi::InferenceExecutionContext* ctx, nvigi::InferenceExecutionState state, NVIGIAppCtx& appCtx)
+{
+    // Outputs from GPT
+    auto slots = ctx->outputs;
+    const nvigi::InferenceDataText* text{};
+    slots->findAndValidateSlot(nvigi::kGPTDataSlotResponse, &text);
+    auto response = std::string(text->getUTF8Text());
+    appCtx.gptOutput += response;
+    if (state == nvigi::kInferenceExecutionStateDone)
+    {
+        std::string text = "gpt output:" + appCtx.gptOutput + "\n";
+        loggingCallback(nvigi::LogType::eInfo, text.c_str());
+    }
+
+    return state;
+}
+
+nvigi::InferenceExecutionState PipelineCallback(const nvigi::InferenceExecutionContext* ctx, nvigi::InferenceExecutionState state, void* userData)
+{
+    auto appCtx = (NVIGIAppCtx*)userData;
+    if (!appCtx)
+        return nvigi::kInferenceExecutionStateInvalid;
+
+    if (ctx->instance->getFeatureId(ctx->instance->data) == appCtx->stages[0])
+        return ASRCallback(ctx, state, *appCtx);
+    else if (ctx->instance->getFeatureId(ctx->instance->data) == appCtx->stages[1])
+        return GPTCallback(ctx, state, *appCtx);
+
+    return state;
+};
+
+int RunInference(NVIGIAppCtx& nvigiCtx, const std::vector<int16_t>& wav, const std::string& promptText, const std::string& reversePromptText)
+{
+    //! Prepare audio input slot
+    nvigi::InferenceDataAudioSTLHelper audio{ wav };
+
+    //! Prepare prompt
+    nvigi::InferenceDataTextSTLHelper prompt{ promptText };
+
+    std::vector<nvigi::InferenceDataSlot> slots = { {nvigi::kASRWhisperDataSlotAudio, audio}, {nvigi::kGPTDataSlotSystem, prompt} };
+    nvigi::InferenceDataSlotArray inputs{ slots.size(), slots.data() };
+
+    nvigi::GPTRuntimeParameters gptRuntime{};
+    gptRuntime.interactive = false;
+    gptRuntime.reversePrompt = reversePromptText.c_str();
+
+    //! Setup execution context for the pipeline
+    nvigi::InferenceExecutionContext ctx{};
+    ctx.instance = nvigiCtx.pipelineInst;
+    ctx.runtimeParameters = gptRuntime;
+    ctx.callback = PipelineCallback;
+    ctx.callbackUserData = &nvigiCtx;
+    ctx.inputs = &inputs;
+    if (NVIGI_FAILED(result, nvigiCtx.pipelineInst->evaluate(&ctx)))
+    {
+        loggingCallback(nvigi::LogType::eError, "Error running pipeline inference");
+        return -1;
+    }
+
+    return 0;
 }
 
 int main(int argc, char** argv)
 {
+    NVIGIAppCtx nvigiCtx;
+
 #ifdef NVIGI_WINDOWS
     FILE* f{};
     freopen_s(&f, "NUL", "w", stderr);
@@ -133,29 +369,6 @@ int main(int argc, char** argv)
 #endif
 
     auto exePathUtf8 = getExecutablePath();
-#ifdef NVIGI_WINDOWS
-    auto libPath = exePathUtf8 + "/nvigi.core.framework.dll";
-#else
-    auto libPath = exePathUtf8 + "/nvigi.core.framework.so";
-#endif
-    HMODULE lib = LoadLibraryA(libPath.c_str());
-    if (lib == nullptr)
-    {
-        loggingCallback(nvigi::LogType::eError, "Could not load NVIGI core library");
-        return -1;
-    }
-    
-    GET_NVIGI_CORE_FUN(nvigiInit);
-    GET_NVIGI_CORE_FUN(nvigiShutdown);
-    GET_NVIGI_CORE_FUN(nvigiLoadInterface);
-    GET_NVIGI_CORE_FUN(nvigiUnloadInterface);
-
-    if (ptr_nvigiInit == nullptr || ptr_nvigiShutdown == nullptr || 
-        ptr_nvigiLoadInterface == nullptr || ptr_nvigiUnloadInterface == nullptr)
-    {
-        loggingCallback(nvigi::LogType::eError, "Could not load NVIGI core library");
-        return -1;
-    }
 
     const char* paths[] =
     {
@@ -173,88 +386,21 @@ int main(int argc, char** argv)
     //////////////////////////////////////////////////////////////////////////////
     //! Init NVIGI
     //! 
-
-    nvigi::Preferences pref{};
-    pref.logLevel = nvigi::LogLevel::eVerbose;
-    pref.showConsole = true;
-    pref.numPathsToPlugins = 1;
-    pref.utf8PathsToPlugins = paths;
-    pref.logMessageCallback = nullptr;
-    pref.utf8PathToLogsAndData = exePathUtf8.c_str();
-
-    uint32_t n_threads = 16;
-    uint32_t vram = 1024 * 12;
-
-    auto result = ptr_nvigiInit(pref, nullptr, nvigi::kSDKVersion);
-    if (result != nvigi::kResultOk)
-    {
-        loggingCallback(nvigi::LogType::eError, "NVIGI init failed");
+    if (InitNVIGI(nvigiCtx, exePathUtf8))
         return -1;
-    }
+
+    uint32_t vram = 1024 * 12;
 
     //////////////////////////////////////////////////////////////////////////////
     //! Init Plugin Interfaces and Instances
     //! 
-
-    //! AIP
-    nvigi::aip::IAiPipeline* iaip{};
-    if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigi::plugin::ai::pipeline::kId, &iaip, ptr_nvigiLoadInterface)))
-    {
-        loggingCallback(nvigi::LogType::eError, "'nvigiGetInterface' failed");
+    if (CreatePipeline(nvigiCtx, modelDir, vram))
         return -1;
-    }
-
-    //! ASR
-    nvigi::ASRWhisperCreationParameters asrParams{};
-    nvigi::CommonCreationParameters asrCommon{};
-    {
-        asrCommon.utf8PathToModels = modelDir.c_str();
-        asrCommon.numThreads = n_threads;
-        asrCommon.vramBudgetMB = vram;
-        asrCommon.modelGUID = "{5CAD3A03-1272-4D43-9F3D-655417526170}";
-        asrCommon.chain(asrParams);
-    }
-
-    //! GPT
-    nvigi::GPTCreationParameters gptParams{};
-    nvigi::CommonCreationParameters gptCommon{};
-    {
-        //! 
-        //! Here we provide an example local vs cloud, same pattern applies to any other stage
-        //! 
-
-        gptCommon.utf8PathToModels = modelDir.c_str();
-        gptCommon.numThreads = n_threads;
-        gptCommon.vramBudgetMB = vram;
-
-        //! Model is the same regardless of the backend
-        gptCommon.modelGUID = "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}";
-        gptCommon.chain(gptParams);
-    }
-
-    std::vector<const nvigi::NVIGIParameter*> stageParams = { asrCommon, gptCommon };
-    std::vector<nvigi::PluginID> stages =
-    {
-        nvigi::plugin::asr::ggml::cuda::kId,
-        nvigi::plugin::gpt::ggml::cuda::kId
-    };
-
-    //! Creation parameters for the pipeline
-    nvigi::aip::AiPipelineCreationParameters aipParams{};
-
-    aipParams.numStages = stages.size();
-    aipParams.stages = stages.data();
-    aipParams.stageParams = stageParams.data();
-
-    //! Create pipeline instance
-    nvigi::InferenceInstance* instance{};
-    iaip->createInstance(aipParams, &instance);
 
     //////////////////////////////////////////////////////////////////////////////
     //! Run inference
     //! 
 
-    //! Prepare audio input slot
     auto wav = read(audioFile.c_str());
     if (wav.empty())
     {
@@ -262,99 +408,22 @@ int main(int argc, char** argv)
         return -1;
     }
 
-    //! Prepare audio input slot
-    nvigi::CpuData _audio{ wav.size(), wav.data() };
-    nvigi::InferenceDataAudio audio{ _audio };
-    //! Prepare prompt
     std::string promptText("This is a conversation between John F. Kennedy (JFK), the late USA president and person named Bob. Bob's answers are short and on the point.\nJFK: ");
-    nvigi::CpuData _prompt{ promptText.size(), promptText.data() };
-    nvigi::InferenceDataText prompt{ _prompt };
-    std::vector<nvigi::InferenceDataSlot> slots = { {nvigi::kASRWhisperDataSlotAudio, &audio}, {nvigi::kGPTDataSlotSystem, &prompt} };
-    nvigi::InferenceDataSlotArray inputs{ slots.size(), slots.data() };
 
-    struct AceCallbackCtx
-    {
-        nvigi::aip::AiPipelineCreationParameters aipParams{};
-        std::string asrOutput{};
-        std::string gptOutput{};
-        std::string a2fOutput{};
-        std::vector<nvigi::PluginID> stages{};
-    };
-    AceCallbackCtx aipCtx{};
-    aipCtx.aipParams = aipParams;
-    aipCtx.stages = stages;
-    auto aipCallback = [](const nvigi::InferenceExecutionContext* ctx, nvigi::InferenceExecutionState state, void* userData)->nvigi::InferenceExecutionState
-        {
-            auto aipCtx = (AceCallbackCtx*)userData;
-            if (ctx->instance->getFeatureId(ctx->instance->data) == aipCtx->stages[0])
-            {
-                // Outputs from ASR
-                auto slots = ctx->outputs;
-                const nvigi::InferenceDataText* text{};
-                slots->findAndValidateSlot(nvigi::kASRWhisperDataSlotTranscribedText, &text);
-                auto response = std::string(text->getUTF8Text());
-                if (response.find("<JSON>") != std::string::npos)
-                {
-                    std::string text = "asr stats:" + response + "\n";
-                    loggingCallback(nvigi::LogType::eInfo, text.c_str());
-                }
-                else
-                {
-                    aipCtx->asrOutput += response;
-                }
-                if (state == nvigi::kInferenceExecutionStateDone)
-                {
-                    std::string text = "asr output:" + aipCtx->asrOutput + "\n";
-                    loggingCallback(nvigi::LogType::eInfo, text.c_str());
-                }
-            }
-            else if (ctx->instance->getFeatureId(ctx->instance->data) == aipCtx->stages[1])
-            {
-                // Outputs from GPT
-                auto slots = ctx->outputs;
-                const nvigi::InferenceDataText* text{};
-                slots->findAndValidateSlot(nvigi::kGPTDataSlotResponse, &text);
-                auto response = std::string(text->getUTF8Text());
-                aipCtx->gptOutput += response;
-                if (state == nvigi::kInferenceExecutionStateDone)
-                {
-                    std::string text = "gpt output:" + aipCtx->gptOutput + "\n";
-                    loggingCallback(nvigi::LogType::eInfo, text.c_str());
-                }
-            }
+    std::string reversePromptText("JFK:");
 
-            return state;
-        };
-
-    nvigi::GPTRuntimeParameters gptRuntime{};
-    gptRuntime.interactive = true;
-    gptRuntime.reversePrompt = "JFK:";
-
-    //! Setup execution context for the pipeline
-    nvigi::InferenceExecutionContext ctx{};
-    ctx.instance = instance;
-    ctx.runtimeParameters = gptRuntime;
-    ctx.callback = aipCallback;
-    ctx.callbackUserData = &aipCtx;
-    ctx.inputs = &inputs;
-    instance->evaluate(&ctx);
+    if (RunInference(nvigiCtx, wav, promptText, reversePromptText))
+        return -1;
 
     //////////////////////////////////////////////////////////////////////////////
     //! Shutdown NVIGI
     //! 
 
-    iaip->destroyInstance(instance);
-
-    unloadInterface(nvigi::plugin::ai::pipeline::kId, iaip);
-
-    result = ptr_nvigiShutdown();
-    if (result != nvigi::kResultOk)
-    {
-        loggingCallback(nvigi::LogType::eError, "Error in NVIGI shutdown");
+    if (ReleasePipeline(nvigiCtx))
         return -1;
-    }
 
-    FreeLibrary(lib);
+    if (ShutdownNVIGI(nvigiCtx))
+        return -1;
 
     return 0;
 }

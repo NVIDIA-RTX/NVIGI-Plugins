@@ -1,4 +1,7 @@
 <project toolsVersion="6.21">
+	<dependency name="cig_scheduler_settings" linkPath="external/cig_scheduler_settings">
+		<package name="cig_scheduler_settings_win64" version="202502282034-446fda24-main" platforms="windows-x86_64"/>
+	</dependency>
 	<dependency name="cuda" linkPath="external/cuda">
 		<package name="cuda" version="v12.8.0-windows-x64" platforms="windows-x86_64"/>
 		<package name="cuda-linux-x86_64" version="12.1.0" platforms="linux-x86_64"/>
@@ -7,9 +10,9 @@
 		<package name="libcurl" version="7.80.0+nv1-windows-x86_64" platforms="windows-x86_64"/>
 		<package name="libcurl" version="8.1.2-3-linux-x86_64-static-release" platforms="linux-x86_64"/>
 	</dependency>
-	<dependency name="llamacpp" linkPath="external/llamacpp/a1fe56b">
-		<package name="llamacpp" version="a1fe56b_x64-windows" platforms="windows-x86_64"/>
-		<package name="llamacpp" version="a1fe56b_x64-linux" platforms="linux-x86_64"/>
+	<dependency name="llamacpp" linkPath="external/llama.cpp">
+		<package name="llama.cpp" version="cab7572_x64-windows-cuda" platforms="windows-x86_64"/>
+		<package name="llamacpp" version="cab7572_x64-linux" platforms="linux-x86_64"/>
 	</dependency>
 	<dependency name="Microsoft.AI.DirectML.1.15.4" linkPath="external/Microsoft.AI.DirectML.1.15.4">
 		<package name="Microsoft.AI.DirectML.1.15.4" version="1.15.4" platforms="windows-x86_64"/>
@@ -29,8 +32,8 @@
 		<package name="openssl" version="3.2.0_x64-linux" platforms="linux-x86_64"/>
 	</dependency>
 	<dependency name="whispercpp" linkPath="external/whisper.cpp">
-		<package name="whispercpp" version="01b5327_x64-windows" platforms="windows-x86_64"/>
-		<package name="whispercpp" version="01b5327_x64-linux" platforms="linux-x86_64"/>
+		<package name="whisper.cpp" version="45e8a3b_x64-windows-cuda" platforms="windows-x86_64"/>
+		<package name="whispercpp" version="45e8a3b_x64-linux" platforms="linux-x86_64"/>
 	</dependency>
 	<dependency name="zlib" linkPath="external/zlib">
 		<package name="zlib" version="1.3.1_x64-windows" platforms="windows-x86_64"/>

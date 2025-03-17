@@ -26,7 +26,12 @@ project "nvigi.plugin.asr.ggml.cuda"
 		externaldir .."whisper.cpp/include/**.h"
 	}
 	
-	includedirs {externaldir .."whisper.cpp/include", externaldir .."whisper.cpp/ggml/include", externaldir .."cuda/include", coresdkdir .. "source/utils/nvigi.ai", ROOT .. "source/plugins/nvigi.asr/ggml/external"}
+	includedirs {
+		externaldir .."whisper.cpp/include", 
+		externaldir .."whisper.cpp/ggml/include", 
+		externaldir .."cuda/include", 
+		coresdkdir .. "source/utils/nvigi.ai", 
+		ROOT .. "source/plugins/nvigi.asr/ggml/external"}
 
 	-- some 3rd party libs (ggml) do not compile without it in production mode when security flags are set
 	filter {"system:windows","configurations:Production"}
@@ -40,8 +45,10 @@ project "nvigi.plugin.asr.ggml.cuda"
 		}}
 		
 
-		libdirs {externaldir .."cuda/lib/x64"}
-		links {"whisper.lib","ggml","common", "cuda.lib", "cublas.lib", "winmm.lib"}
+		libdirs {
+			externaldir .."cuda//lib/x64",
+		}
+		links {"ggml-cuda","ggml-base","ggml-cpu","whisper","ggml", "cuda", "cublas", "winmm"}
 
 		filter {"configurations:Debug"}
 			libdirs {externaldir .."whisper.cpp/cuda/lib/Debug"}
@@ -50,7 +57,8 @@ project "nvigi.plugin.asr.ggml.cuda"
 	
 	filter {"system:linux"}
 		libdirs {externaldir .."cuda/lib64", externaldir .."cuda/lib64/stubs", externaldir .."whisper.cpp/cuda/lib64"}
-		links {"whisper","ggml","common", "cuda", "cublas", "dl", "pthread", "rt"}
+		linkoptions {"-fopenmp", "-lcublas"}
+		links {"whisper", "common", "ggml", "ggml-cpu","ggml-base","ggml-cuda", "cuda", "cublas", "dl", "pthread", "rt"}
 	filter {}
 
 	add_cuda_dependencies()
@@ -95,16 +103,14 @@ project "nvigi.plugin.asr.ggml.cpu"
 	includedirs {externaldir .."whisper.cpp/include", externaldir .."whisper.cpp/ggml/include" }
 	
 	filter {"system:windows"}
-		links {"winmm.lib","whisper","ggml","common"}
+		links {"whisper","ggml", "ggml-base","ggml-cpu","winmm"}
 		filter {"configurations:Debug"}
 			libdirs {externaldir .."whisper.cpp/cpu/lib/Debug"}
 		filter {"configurations:not Debug"}
 			libdirs {externaldir .."whisper.cpp/cpu/lib/NotDebug"}	
 	filter {"system:linux"}
 		libdirs {externaldir .."whisper.cpp/cpu/lib64"}
-		links {"whisper","ggml","common", "dl", "pthread", "rt"}
+		links {"ggml-base","ggml-cpu", "whisper","ggml", "dl", "pthread", "rt"}
 	filter {}
 
-	
-group ""
 end

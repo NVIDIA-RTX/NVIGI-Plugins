@@ -187,7 +187,8 @@ namespace nvigi
 			// check if the last token is SEP
 			// it should be automatically added by the tokenizer when 'tokenizer.ggml.add_eos_token' is set to 'true'
 			for (auto& inp : inputs) {
-				if (inp.empty() || inp.back() != llama_token_sep(model)) {
+				//if (inp.empty() || inp.back() != llama_token_sep(model)) 
+				{
 					LOG_WRN("%s: last token in the prompt is not SEP\n", __func__);
 					LOG_WRN("%s: 'tokenizer.ggml.add_eos_token' should be set to 'true' in the GGUF header\n", __func__);
 				}
@@ -216,13 +217,13 @@ namespace nvigi
 
 			//print_build_info();
 
-			if (params.sparams.seed == LLAMA_DEFAULT_SEED) {
-				params.sparams.seed = static_cast<decltype(params.sparams.seed)>(time(NULL));
+			if (params.sampling.seed == LLAMA_DEFAULT_SEED) {
+				params.sampling.seed = static_cast<decltype(params.sampling.seed)>(time(NULL));
 			}
 
 			LOG_INF("seed  = %u", params.sparams.seed);
 
-			std::mt19937 rng(params.sparams.seed);
+			std::mt19937 rng(params.sampling.seed);
 
 			// load the model
 			if (model == NULL) {
@@ -230,7 +231,7 @@ namespace nvigi
 				return kResultInvalidParameter;
 			}
 
-			const int n_ctx_train = llama_n_ctx_train(model);
+			const int n_ctx_train = llama_model_n_ctx_train(model);
 			const int n_ctx = llama_n_ctx(ctx);
 
 			const enum llama_pooling_type pooling_type = llama_pooling_type(ctx);
@@ -278,7 +279,7 @@ namespace nvigi
 			}
 
 			// allocate output
-			const int n_embd = llama_n_embd(model);
+			const int n_embd = llama_model_n_embd(model);
 			// Begin NVIDIA Modification
 			// we take embedding as input, compared to LlamaCPP embedding.cpp which creates a local here.
 			embeddings.resize(n_embd_count * n_embd);
@@ -328,7 +329,7 @@ namespace nvigi
 			if (model == nullptr)
 				return 0;
 			else
-				return llama_n_embd(model);
+				return llama_model_n_embd(model);
 		}
 
 	}

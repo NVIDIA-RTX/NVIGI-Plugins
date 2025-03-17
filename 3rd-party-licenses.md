@@ -754,7 +754,7 @@ You by any and all Contributors for the Covered Software under Section
 end user license agreements (excluding distributors and resellers) which
 have been validly granted by You or Your distributors under this License
 prior to termination shall survive termination.
-
+```
 ************************************************************************
 *                                                                      *
 *  6. Disclaimer of Warranty                                           *
@@ -796,7 +796,7 @@ prior to termination shall survive termination.
 *  limitation may not apply to You.                                    *
 *                                                                      *
 ************************************************************************
-
+```
 8. Litigation
 -------------
 

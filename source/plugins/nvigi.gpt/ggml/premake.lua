@@ -1,7 +1,6 @@
 group "plugins/gpt"
 
-local llama_cpp_version = "a1fe56b"
-local external_dir_llamacpp = externaldir .. "llamacpp/" .. llama_cpp_version
+local external_dir_llamacpp = externaldir .. "llama.cpp"
 
 project "nvigi.plugin.gpt.ggml.cuda"
 	kind "SharedLib"
@@ -40,7 +39,6 @@ project "nvigi.plugin.gpt.ggml.cuda"
 	}
 	
 	vpaths { ["impl"] = {"../*.h", "./*.h", "./*.cpp" }}
-	local suffixe_llamacpp_lib = "_" .. llama_cpp_version .. "_cuda.lib"
 
 	-- some 3rd party libs (ggml) do not compile without it in production mode when security flags are set
 	filter {"system:windows","configurations:Production"}
@@ -49,36 +47,44 @@ project "nvigi.plugin.gpt.ggml.cuda"
 
 	filter {"system:windows"}
 
-		libdirs {externaldir .."cuda//lib/x64"}
+		libdirs {
+			externaldir .."cuda//lib/x64",
+		}
+
 		links {"cuda.lib", "cublas.lib"}
 
 
 		filter {"system:windows", "configurations:Debug"}
 			links {
-				(external_dir_llamacpp .. "/lib/Debug/common"..suffixe_llamacpp_lib),
-				(external_dir_llamacpp .. "/lib/Debug/ggml"..suffixe_llamacpp_lib), 
-				(external_dir_llamacpp .. "/lib/Debug/llama"..suffixe_llamacpp_lib),
-				(external_dir_llamacpp .. "/lib/Debug/llava_static"..suffixe_llamacpp_lib)
+				(external_dir_llamacpp .. "/cuda/lib/Debug/common.lib"),
+				(external_dir_llamacpp .. "/cuda/lib/Debug/ggml.lib"), 
+				(external_dir_llamacpp .. "/cuda/lib/Debug/llama.lib"),
+				(external_dir_llamacpp .. "/cuda/lib/Debug/llava_static.lib"),				
+				(external_dir_llamacpp .. "/cuda/lib/Debug/ggml-cpu.lib"),
+				(external_dir_llamacpp .. "/cuda/lib/Debug/ggml-cuda.lib"),
+				(external_dir_llamacpp .. "/cuda/lib/Debug/ggml-base.lib")
 			}
 
 		filter {"system:windows", "configurations:not Debug"}
 			links {
-				(external_dir_llamacpp .. "/lib/NotDebug/common"..suffixe_llamacpp_lib),
-				(external_dir_llamacpp .. "/lib/NotDebug/ggml"..suffixe_llamacpp_lib), 
-				(external_dir_llamacpp .. "/lib/NotDebug/llama"..suffixe_llamacpp_lib),
-				(external_dir_llamacpp .. "/lib/NotDebug/llava_static"..suffixe_llamacpp_lib)
+				(external_dir_llamacpp .. "/cuda/lib/NotDebug/common.lib"),
+				(external_dir_llamacpp .. "/cuda/lib/NotDebug/ggml.lib"), 
+				(external_dir_llamacpp .. "/cuda/lib/NotDebug/llama.lib"),
+				(external_dir_llamacpp .. "/cuda/lib/NotDebug/llava_static.lib"),
+				(external_dir_llamacpp .. "/cuda/lib/NotDebug/ggml-cpu.lib"),
+				(external_dir_llamacpp .. "/cuda/lib/NotDebug/ggml-cuda.lib"),
+				(external_dir_llamacpp .. "/cuda/lib/NotDebug/ggml-base.lib")
 			}
 
 
 	filter {"system:linux"}
-		local suffixe_llamacpp_lib = "_" .. llama_cpp_version .. "_cuda"
 		libdirs {
 			externaldir .."cuda/lib64",
 			externaldir .."cuda/lib64/stubs",
-			external_dir_llamacpp .. "/lib64/",
+			external_dir_llamacpp .. "/cuda/lib64/",
 		}
 		linkoptions {"-fopenmp", "-lcublas"}
-		links {"llama"..suffixe_llamacpp_lib, "common"..suffixe_llamacpp_lib, "ggml"..suffixe_llamacpp_lib, "llava_static"..suffixe_llamacpp_lib, "cuda", "cublas", "dl", "pthread", "rt"}
+		links {"llama", "common", "ggml", "llava_static", "ggml-cpu","ggml-base","ggml-cuda", "cuda", "cublas", "dl", "pthread", "rt"}
 
 	filter {}
 
@@ -122,30 +128,32 @@ project "nvigi.plugin.gpt.ggml.cpu"
 
 	vpaths { ["impl"] = {"../*.h", "./*.h", "./*.cpp" }}
 
-	local suffixe_llamacpp_lib = "_" .. llama_cpp_version .. "_cpu.lib"
 	filter {"system:windows", "configurations:Debug"}
 		links {
-			(external_dir_llamacpp .. "/lib/Debug/common"..suffixe_llamacpp_lib),
-			(external_dir_llamacpp .. "/lib/Debug/ggml"..suffixe_llamacpp_lib), 
-			(external_dir_llamacpp .. "/lib/Debug/llama"..suffixe_llamacpp_lib),
-			(external_dir_llamacpp .. "/lib/Debug/llava_static"..suffixe_llamacpp_lib)
+			(external_dir_llamacpp .. "/cpu/lib/Debug/common.lib"),
+			(external_dir_llamacpp .. "/cpu/lib/Debug/ggml.lib"), 
+			(external_dir_llamacpp .. "/cpu/lib/Debug/llama.lib"),
+			(external_dir_llamacpp .. "/cpu/lib/Debug/llava_static.lib"),
+			(external_dir_llamacpp .. "/cpu/lib/Debug/ggml-cpu.lib"),
+			(external_dir_llamacpp .. "/cpu/lib/Debug/ggml-base.lib"),
 		}
 
 	filter {"system:windows", "configurations:not Debug"}
 		links {
-			(external_dir_llamacpp .. "/lib/NotDebug/common"..suffixe_llamacpp_lib),
-			(external_dir_llamacpp .. "/lib/NotDebug/ggml"..suffixe_llamacpp_lib), 
-			(external_dir_llamacpp .. "/lib/NotDebug/llama"..suffixe_llamacpp_lib),
-			(external_dir_llamacpp .. "/lib/NotDebug/llava_static"..suffixe_llamacpp_lib)
+			(external_dir_llamacpp .. "/cpu/lib/NotDebug/common.lib"),
+			(external_dir_llamacpp .. "/cpu/lib/NotDebug/ggml.lib"), 
+			(external_dir_llamacpp .. "/cpu/lib/NotDebug/llama.lib"),
+			(external_dir_llamacpp .. "/cpu/lib/NotDebug/llava_static.lib"),
+			(external_dir_llamacpp .. "/cpu/lib/NotDebug/ggml-cpu.lib"),
+			(external_dir_llamacpp .. "/cpu/lib/NotDebug/ggml-base.lib"),
 		}
 	
 	filter {"system:linux"}
-		local suffixe_llamacpp_lib = "_" .. llama_cpp_version .. "_cpu"
 		libdirs {
-			external_dir_llamacpp .. "/lib64/",
+			external_dir_llamacpp .. "/cpu/lib64/",
 		}
 		linkoptions {"-fopenmp"}
-		links {"llama"..suffixe_llamacpp_lib, "common"..suffixe_llamacpp_lib, "ggml"..suffixe_llamacpp_lib, "llava_static"..suffixe_llamacpp_lib}
+		links {"llama", "common", "ggml", "llava_static"}
 
 end
 

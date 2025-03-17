@@ -51,12 +51,21 @@ IF NOT "%1"=="" (
     IF "%1"=="-fast" (
         set bld=Build
     )
+    IF "%1"=="-Debug" (
+        SET cfg=Debug
+    )
     IF "%1"=="-debug" (
         SET cfg=Debug
+    )
+    IF "%1"=="-Release" (
+        SET cfg=Release
     )
     IF "%1"=="-release" (
         SET cfg=Release
     )
+    IF "%1"=="-Production" (
+        SET cfg=Production
+    )    
     IF "%1"=="-production" (
         SET cfg=Production
     )    

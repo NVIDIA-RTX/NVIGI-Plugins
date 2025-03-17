@@ -1,5 +1,6 @@
 {
 	"core": [
+		"docs\\CustomizingPlugins.md",
 		"docs\\Samples.md"
 	],
 	"asr.ggml.cpu": [
@@ -55,10 +56,18 @@
 		"data\\nvigi.models\\nvigi.plugin.gpt.ggml\\{01F43B70-CE23-42CA-9606-74E80C5ED0B6}\\nvigi.model.config.json",
 		"data\\nvigi.models\\nvigi.plugin.gpt.ggml\\{8E31808B-C182-4016-9ED8-64804FF5B40D}\\download.bat",
 		"data\\nvigi.models\\nvigi.plugin.gpt.ggml\\{8E31808B-C182-4016-9ED8-64804FF5B40D}\\nvigi.model.config.json",
+		"data\\nvigi.models\\nvigi.plugin.gpt.ggml\\{0BAEDD5C-F2CA-49AA-9892-621C40030D12}\\nvigi.model.config.json",
+		"data\\nvigi.models\\nvigi.plugin.gpt.ggml\\{0BAEDD5C-F2CA-49AA-9892-621C40030D12}\\README.txt",
+		"data\\nvigi.models\\nvigi.plugin.gpt.ggml\\{0BAEDD5C-F2CA-49AA-9892-621C40030D13}\\nvigi.model.config.json",
+		"data\\nvigi.models\\nvigi.plugin.gpt.ggml\\{0BAEDD5C-F2CA-49AA-9892-621C40030D13}\\README.txt",
 		"data\\nvigi.models\\nvigi.plugin.gpt.ggml\\{01F43B70-CE23-42CA-9606-74E80C5ED0B6}\\download.bat",
 		"data\\nvigi.models\\nvigi.plugin.gpt.ggml\\{01F43B70-CE23-42CA-9606-74E80C5ED0B6}\\nvigi.model.config.json",
 		"data\\nvigi.models\\nvigi.plugin.gpt.ggml\\{8E31808B-C182-4016-9ED8-64804FF5B40D}\\download.bat",
 		"data\\nvigi.models\\nvigi.plugin.gpt.ggml\\{8E31808B-C182-4016-9ED8-64804FF5B40D}\\nvigi.model.config.json",
+		"data\\nvigi.models\\nvigi.plugin.gpt.ggml\\{0BAEDD5C-F2CA-49AA-9892-621C40030D12}\\nvigi.model.config.json",
+		"data\\nvigi.models\\nvigi.plugin.gpt.ggml\\{0BAEDD5C-F2CA-49AA-9892-621C40030D12}\\README.txt",
+		"data\\nvigi.models\\nvigi.plugin.gpt.ggml\\{0BAEDD5C-F2CA-49AA-9892-621C40030D13}\\nvigi.model.config.json",
+		"data\\nvigi.models\\nvigi.plugin.gpt.ggml\\{0BAEDD5C-F2CA-49AA-9892-621C40030D13}\\README.txt",
 		"source\\plugins\\nvigi.gpt\\nvigi_gpt.h",
 		"source\\plugins\\nvigi.gpt\\ggml\\gpt.cpp",
 		"source\\plugins\\nvigi.gpt\\ggml\\gpt.h",
@@ -141,6 +150,7 @@
 		"source\\shared\\sharedVersions.h"
 	],
 	"all": [
+		"docs\\media\\ASqFlowSolution.png",
 		"docs\\media\\guid-1.png",
 		"docs\\media\\guid.png",
 		"docs\\media\\OpenVoice.png",

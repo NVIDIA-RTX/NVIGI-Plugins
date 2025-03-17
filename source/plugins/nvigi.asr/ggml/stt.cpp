@@ -80,6 +80,11 @@ struct InferenceContext
     std::atomic<bool> running = true;
 
 #if GGML_USE_CUBLAS
+    // Used to set the relative priority of GPU inference and graphics
+    std::vector<cudaStream_t> cuda_streams;
+#endif
+
+#if GGML_USE_CUBLAS
     // Use PushPoppableCudaContext defined in push_poppable_cuda_context.h
 #else
     // Use dummy PushPoppableCudaContext to avoid depending on CUDA
@@ -131,6 +136,10 @@ struct ASRContext
     // Caps and requirements
     json modelInfo;
     ai::CommonCapsData capsData;
+
+#ifdef GGML_USE_CUBLAS
+    nvigi::IHWICuda* icig{};
+#endif
 };
 
 nvigi::Result evaluate(nvigi::InferenceExecutionContext* execCtx);
@@ -269,6 +278,24 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
             cparams.gpu_device = cudaParams ? cudaParams->device : 0;
 #endif
             instanceData->model = whisper_init_from_file_with_params(pathToModel.c_str(),cparams);
+
+#if GGML_USE_CUBLAS
+            // We ask whisper for all the cuda_streams it is going to use and 
+            // store them to enable us to change their priorities dynamically
+            size_t stream_count = whisper_get_cuda_stream_count(instanceData->model);
+            instanceData->cuda_streams.resize(stream_count);
+            whisper_get_cuda_streams(instanceData->model, (void**)instanceData->cuda_streams.data(), stream_count);
+
+            // Apply the global priority to all streams
+            if (ctx.icig->getVersion() >= 2)
+            {
+                nvigi::Result cuerr = ctx.icig->cudaApplyGlobalGpuInferenceSchedulingMode(instanceData->cuda_streams.data(), instanceData->cuda_streams.size());
+                if (cuerr != kResultOk)
+                {
+                    NVIGI_LOG_WARN("Could not set relative priority of compute and graphics. Please use 575 driver or higher\n");
+                }
+            }
+#endif
         }
         if (!instanceData->model)
         {
@@ -324,7 +351,7 @@ nvigi::Result whisperGetCapsAndRequirements(nvigi::NVIGIParameter** _info, const
 
     // CUDA or CPU backend
 #if defined(GGML_USE_CUBLAS)
-    info->common->supportedBackends = nvigi::InferenceBackendLocations::eGPU;
+    info->common->supportedBackends = nvigi::InferenceBackendLocations::eGPU | nvigi::InferenceBackendLocations::eCPU;
 #else
     info->common->supportedBackends = nvigi::InferenceBackendLocations::eCPU;
 #endif
@@ -398,7 +425,7 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
             //! Temporary outputs for the callback since host did not provide any
             auto text = nvigi::CpuData(content.length()+1, (const void*)content.c_str());
             auto data = nvigi::InferenceDataText(text);
-            std::vector<nvigi::InferenceDataSlot> slots = { {kASRWhisperDataSlotTranscribedText, &data} };
+            std::vector<nvigi::InferenceDataSlot> slots = { {kASRWhisperDataSlotTranscribedText, data} };
             nvigi::InferenceDataSlotArray outputs = { slots.size(), slots.data() };
             execCtx->outputs = &outputs;
             res = execCtx->callback(execCtx, state, execCtx->callbackUserData);
@@ -409,6 +436,20 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
     };
 
     auto instance = (nvigi::asr::InferenceContext*)(execCtx->instance->data);
+
+#if GGML_USE_CUBLAS
+    // We apply the global scheduling mode to our streams at every evaluate() 
+    // to reflect any changes the user made to the global mode between calls
+    if (ctx.icig->getVersion() >= 2)
+    {
+        nvigi::Result err = ctx.icig->cudaApplyGlobalGpuInferenceSchedulingMode(instance->cuda_streams.data(), instance->cuda_streams.size());
+        if (err != kResultOk)
+        {
+            NVIGI_LOG_WARN_ONCE("Could not set relative priority of compute and graphics, insufficient driver\n");
+        }
+    }
+#endif
+
     auto& params = instance->params;
     auto strategy = WHISPER_SAMPLING_GREEDY;
     auto runtime = findStruct<ASRWhisperRuntimeParameters>(execCtx->runtimeParameters);
@@ -577,17 +618,13 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
 
             auto timings = whisper_get_timings(instance->model);
 
-            const int32_t n_sample = std::max(1, timings.n_sample);
-            const int32_t n_encode = std::max(1, timings.n_encode);
-            const int32_t n_decode = std::max(1, timings.n_decode);
-            const int32_t n_prompt = std::max(1, timings.n_prompt);
+            NVIGI_LOG_INFO("timings:sample %.2fms", timings->sample_ms);
+            NVIGI_LOG_INFO("timings:encode %.2fms", timings->encode_ms);
+            NVIGI_LOG_INFO("timings:decode %.2fms", timings->decode_ms);
+            NVIGI_LOG_INFO("timings:prompt %.2fms", timings->prompt_ms);
+            NVIGI_LOG_INFO("timings:batchd  %.2fms", timings->batchd_ms);
 
-            NVIGI_LOG_INFO("timings:mel    %.2f", timings.t_mel_us / 1000.0f);
-            NVIGI_LOG_INFO("timings:sample %.2f", 1e-3f * timings.t_sample_us);
-            NVIGI_LOG_INFO("timings:encode %.2f", 1e-3f * timings.t_encode_us);
-            NVIGI_LOG_INFO("timings:decode %.2f", 1e-3f * timings.t_decode_us);
-            NVIGI_LOG_INFO("timings:prompt %.2f", 1e-3f * timings.t_prompt_us);
-            NVIGI_LOG_INFO("timings:total  %.2f", timings.t_total_ms);
+            delete timings;
         }
 #endif
         return kResultOk;
@@ -696,13 +733,7 @@ Result nvigiPluginGetInfo(nvigi::framework::IFramework* framework, nvigi::plugin
     info.build = GIT_BRANCH_AND_LAST_COMMIT;
     info.interfaces = { plugin::getInterfaceInfo<IAutoSpeechRecognition>()};
 
-#ifdef NVIGI_ASR_GFN_NVCF
-    //! Defaults indicate no restrictions - plugin can run on any system, even without any adapter
-    info.requiredVendor = nvigi::VendorId::eNone;
-    info.minDriver = {};
-    info.minOS = { NVIGI_DEF_MIN_OS_MAJOR, NVIGI_DEF_MIN_OS_MINOR, NVIGI_DEF_MIN_OS_BUILD };
-    info.minGPUArch = {};
-#elif GGML_USE_CUBLAS
+#if GGML_USE_CUBLAS
     info.minDriver = { NVIGI_CUDA_MIN_DRIVER_MAJOR, NVIGI_CUDA_MIN_DRIVER_MINOR, NVIGI_CUDA_MIN_DRIVER_BUILD };
     info.minOS = { NVIGI_DEF_MIN_OS_MAJOR, NVIGI_DEF_MIN_OS_MINOR, NVIGI_DEF_MIN_OS_BUILD };
     info.minGPUArch = { NVIGI_CUDA_MIN_GPU_ARCH };
@@ -730,9 +761,10 @@ Result nvigiPluginRegister(framework::IFramework* framework)
 
     ctx.feature = asr::getFeatureId(nullptr);
 
-#ifdef NVIGI_ASR_GFN_NVCF
-    if (!framework::getInterface(framework, plugin::net::kId, &ctx.net))
+#if GGML_USE_CUBLAS
+    if (!framework::getInterface(plugin::getContext()->framework, plugin::hwi::cuda::kId, &ctx.icig))
     {
+        NVIGI_LOG_ERROR("Missing interface from 'nvigi.plugin.hwi.cuda'");
         return kResultInvalidState;
     }
 #endif
@@ -744,7 +776,7 @@ Result nvigiPluginRegister(framework::IFramework* framework)
     framework->addInterface(ctx.feature, &ctx.api, 0);
 
     whisper_log_set(nvigi::asr::whisperLogCallback, nullptr);
-    
+
     return kResultOk;
 }
 
@@ -755,6 +787,33 @@ Result nvigiPluginDeregister()
     auto& ctx = (*asr::getContext());
 
     ai::freeCommonCapsAndRequirements(ctx.capsData);
+
+#if GGML_USE_CUBLAS
+    framework::releaseInterface(plugin::getContext()->framework, plugin::hwi::cuda::kId, ctx.icig);
+    ctx.icig = nullptr;
+#endif
+
+    whisper_log_set(nullptr, nullptr);
+
+    // cpu 
+    // Reference:  https://ofekshilon.com/2017/11/03/on-omp_wait_policy/
+    // WhisperCPP uses OpenMP in CPU mode.  On shutdown, OpenMP threads can spin wait for 200ms-2000ms (varying reports)
+    // if you unload the dll before these threads have exited, you get a crash in PartialBarrierN::Block from ggml.c threadpool (where it's coming from won't be obvious)
+    // Potential alternative solution: 
+    // Prior to loading the dll, you can set environment variables to change how OpenMP behaves.
+        //#ifdef _WIN32
+        //	SetEnvironmentVariable(L"OMP_WAIT_POLICY", L"passive");
+        //#else
+        //	setenv("OMP_WAIT_POLICY", "passive", 1);  // The '1' means overwrite if it exists
+        //#endif
+    // but setting an environment variable might be a security concern.  Also, passive means the OpenMP threads will sleep faster, and you might get more latency
+    // as they have to wake up more frequently for work.
+
+    // alternatively, next time we upgrade WhisperCPP, we could build CPU WIHTOUT OpenMP, but it will be slower.
+
+    // So this seems to be the least of evils - wait for the OpenMP threads to spinwait stop and then proceed with shutdown.
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+
     return kResultOk;
 }
 

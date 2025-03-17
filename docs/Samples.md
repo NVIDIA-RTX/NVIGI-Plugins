@@ -62,14 +62,14 @@ Here are the command line options:
 ```console
 Usage: nvigi.basic [options]
 
-  -m, --models      model repo location (REQUIRED)
-  --asr-guid        asr model guid in registry format (default: {5CAD3A03-1272-4D43-9F3D-655417526170})
-  -a, --audio       audio file location (default: )
-  --gpt             gpt mode, 'local' or 'cloud' - model GUID determines the cloud endpoint (default: local)
-  --gpt-guid        gpt model guid in registry format (default: {01F43B70-CE23-42CA-9606-74E80C5ED0B6})
-  -s, --sdk         sdk location, (default: exe location)
-  -t, --token       authorization token for the cloud provider (default: )
-  --vram            the amount of vram to use in MB (default: 8192)
+  -m, --models              model repo location (REQUIRED)
+  --asr-guid                asr model guid in registry format (default: {5CAD3A03-1272-4D43-9F3D-655417526170})
+  -a, --audio               audio file location (default: )
+  --gpt                     gpt mode, 'local' or 'cloud' - model GUID determines the cloud endpoint (default: local)
+  --gpt-guid                gpt model guid in registry format (default: {01F43B70-CE23-42CA-9606-74E80C5ED0B6})
+  -s, --sdk                 sdk location, (default: exe location)
+  -t, --token               authorization token for the cloud provider (default: )
+  --vram                    the amount of vram to use in MB (default: 8192)
 ```
 
 ### Run in Debugger

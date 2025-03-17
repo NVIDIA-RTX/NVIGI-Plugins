@@ -15,6 +15,10 @@
 	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.cloud\{E9102ACB-8CD8-4345-BCBF-CCF6DC758E58}/nvigi.model.config.json
 	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.ggml\{01F43B70-CE23-42CA-9606-74E80C5ED0B6}/download.bat
 	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.ggml\{01F43B70-CE23-42CA-9606-74E80C5ED0B6}/nvigi.model.config.json
+	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.ggml\{0BAEDD5C-F2CA-49AA-9892-621C40030D12}/README.txt
+	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.ggml\{0BAEDD5C-F2CA-49AA-9892-621C40030D12}/nvigi.model.config.json
+	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.ggml\{0BAEDD5C-F2CA-49AA-9892-621C40030D13}/README.txt
+	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.ggml\{0BAEDD5C-F2CA-49AA-9892-621C40030D13}/nvigi.model.config.json
 	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.ggml\{8E31808B-C182-4016-9ED8-64804FF5B40D}/download.bat
 	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.ggml\{8E31808B-C182-4016-9ED8-64804FF5B40D}/nvigi.model.config.json
 	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.onnxgenai\{F47B2597-3B84-4FEC-ABE5-A3B1B106CFF7}/download.bat
@@ -24,10 +28,12 @@
 	nvigi-sdk-source\data\nvigi.test\nvigi.asr/whisper-stream-test.wav
 	nvigi-sdk-source\data\nvigi.test\nvigi.rag/LegendOfDoria_Corpus.txt
 	nvigi-sdk-source\data\nvigi.test\nvigi.rag/LegendOfDoria_SampleQuestions.txt
+	nvigi-sdk-source\docs/CustomizingPlugins.md
 	nvigi-sdk-source\docs/ProgrammingGuideASRWhisper.md
 	nvigi-sdk-source\docs/ProgrammingGuideEmbed.md
 	nvigi-sdk-source\docs/ProgrammingGuideGPT.md
 	nvigi-sdk-source\docs/Samples.md
+	nvigi-sdk-source\docs\media/ASqFlowSolution.png
 	nvigi-sdk-source\docs\media/OpenVoice.png
 	nvigi-sdk-source\docs\media/guid-1.png
 	nvigi-sdk-source\docs\media/guid.png

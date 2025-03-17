@@ -2,7 +2,6 @@
     "name" : "Nemotron Mini 4B Instruct",
     "vram": 3112,
     "n_layers": 33,
-    "context_size" : 4096,
     "model":
     {
       "ext" : "zip or a file",

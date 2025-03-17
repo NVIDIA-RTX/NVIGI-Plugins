@@ -20,6 +20,8 @@
 #include <type_traits>
 #include <mutex>
 #include <atomic>
+#include <chrono>
+
 
 #include <map>
 
@@ -34,7 +36,9 @@ namespace fs = std::filesystem;
 #include "nvigi_asr_whisper.h"
 #include "nvigi_gpt.h"
 #include "nvigi_cloud.h"
+#include "nvigi_stl_helpers.h"
 #include <source/utils/nvigi.dsound/recorder.h>
+#include <nvigi_stl_helpers.h>
 
 #if NVIGI_LINUX
 #include <unistd.h>
@@ -57,19 +61,19 @@ typedef struct __LUID
 #endif
 
 #define DECLARE_NVIGI_CORE_FUN(F) PFun_##F* ptr_##F
-#define GET_NVIGI_CORE_FUN(F) ptr_##F = (PFun_##F*)GetProcAddress(lib, #F)
+#define GET_NVIGI_CORE_FUN(lib, F) ptr_##F = (PFun_##F*)GetProcAddress(lib, #F)
 DECLARE_NVIGI_CORE_FUN(nvigiInit);
 DECLARE_NVIGI_CORE_FUN(nvigiShutdown);
 DECLARE_NVIGI_CORE_FUN(nvigiLoadInterface);
 DECLARE_NVIGI_CORE_FUN(nvigiUnloadInterface);
 
-inline std::vector<uint8_t> read(const char* fname)
+inline std::vector<int16_t> read(const char* fname)
 {
     try
     {
         fs::path p(fname);
         size_t file_size = fs::file_size(p);
-        std::vector<uint8_t> ret_buffer(file_size);
+        std::vector<int16_t> ret_buffer(file_size / 2);
 #ifdef NVIGI_LINUX
         std::fstream file(fname, std::ios::binary | std::ios::in);
 #else
@@ -93,7 +97,7 @@ public:
         std::string default_value;
         std::string value;
         bool required = false;
-};
+    };
 
     void add_command(const std::string& short_name, const std::string& long_name,
         const std::string& description, const std::string& default_value = "",
@@ -161,7 +165,7 @@ public:
         for (const auto& [key, cmd] : commands) {
             if (key == cmd.long_name) { // Print each command only once
                 std::string tmp;
-                if(!cmd.short_name.empty())
+                if (!cmd.short_name.empty())
                     tmp = "  -" + cmd.short_name + ", --" + cmd.long_name;
                 else
                     tmp = "  --" + cmd.long_name;
@@ -258,8 +262,8 @@ inline bool isValidASCII(char ch) {
 // If floating point, it will be converted to int16_t by multiplied to 32767
 template <typename T, typename std::enable_if<std::is_same<T, float>::value || std::is_same<T, int16_t>::value, int>::type = 0>
 void savePlayAudioData(const std::vector<T> audio_data, const std::string output_path,
-                        const int sampling_rate, std::mutex &mtxPlayAudio,
-                        const bool playAudio = false, const bool saveWav = true) {
+    const int sampling_rate, std::mutex & mtxPlayAudio,
+    const bool playAudio = false, const bool saveWav = true) {
 
 
     std::vector<int16_t> audio_data_int16;
@@ -307,51 +311,45 @@ inline std::string removeNonUTF8(const std::string& input) {
         }
     }
     if (countNonUtf8 > 0) {
-		printf("\n%d non-utf8 characters have been removed \n", countNonUtf8);
-	}
+        printf("\n%d non-utf8 characters have been removed \n", countNonUtf8);
+    }
     return output;
 }
 
-int main(int argc, char** argv)
+struct NVIGIAppCtx
 {
-    CommandLineParser parser;
-    parser.add_command("s", "sdk", "sdk location, if none provided assuming exe location", "");
-    parser.add_command("m", "models", "model repo location", "", true);
-    parser.add_command("a", "audio", "audio file location", "", false); // used only for Linux
-    parser.add_command("", "gpt", "gpt mode, 'local' or 'cloud' (model GUID determines cloud endpoint)", "local");
-    parser.add_command("", "gpt-guid", "gpt model guid in registry format", "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}");
-    parser.add_command("", "asr-guid", "asr model guid in registry format", "{5CAD3A03-1272-4D43-9F3D-655417526170}");
-    parser.add_command("t", "token", "authorization token for the cloud provider", "");
-    parser.add_command("", "vram", "the amount of vram to use in MB", "8192");
+    HMODULE coreLib{};
+    nvigi::IAutoSpeechRecognition* iasr{};
+    nvigi::InferenceInstance* asr{};
+    nvigi::IGeneralPurposeTransformer* igpt{};
+    nvigi::PluginID gptId{};
+    nvigi::InferenceInstance* gpt{};
+};
 
-    try { 
-        parser.parse(argc, argv); 
-    }
-    catch (std::exception& e)
-    {
-        printf("%s\n\n", e.what());
-        parser.print_help("nvigi.basic");
-        exit(1);
-    }
+static NVIGIAppCtx nvigiCtx;
+constexpr uint32_t n_threads = 4;
 
-    auto pathToSDKArgument = parser.get("sdk");
-    auto pathToSDKUtf8 = pathToSDKArgument.empty() ? getExecutablePath() : pathToSDKArgument;
+///////////////////////////////////////
+//! NVIGI Init and Shutdown
+
+int InitNVIGI(const std::string& pathToSDKUtf8)
+{
 #ifdef NVIGI_WINDOWS
     auto libPath = pathToSDKUtf8 + "/nvigi.core.framework.dll";
 #else
     auto libPath = pathToSDKUtf8 + "/nvigi.core.framework.so";
 #endif
-    HMODULE lib = LoadLibraryA(libPath.c_str());
-    if (lib == nullptr)
+    nvigiCtx.coreLib = LoadLibraryA(libPath.c_str());
+    if (nvigiCtx.coreLib == nullptr)
     {
         loggingCallback(nvigi::LogType::eError, "Could not load NVIGI core library");
         return -1;
     }
 
-    GET_NVIGI_CORE_FUN(nvigiInit);
-    GET_NVIGI_CORE_FUN(nvigiShutdown);
-    GET_NVIGI_CORE_FUN(nvigiLoadInterface);
-    GET_NVIGI_CORE_FUN(nvigiUnloadInterface);
+    GET_NVIGI_CORE_FUN(nvigiCtx.coreLib, nvigiInit);
+    GET_NVIGI_CORE_FUN(nvigiCtx.coreLib, nvigiShutdown);
+    GET_NVIGI_CORE_FUN(nvigiCtx.coreLib, nvigiLoadInterface);
+    GET_NVIGI_CORE_FUN(nvigiCtx.coreLib, nvigiUnloadInterface);
 
     if (ptr_nvigiInit == nullptr || ptr_nvigiShutdown == nullptr ||
         ptr_nvigiLoadInterface == nullptr || ptr_nvigiUnloadInterface == nullptr)
@@ -365,29 +363,6 @@ int main(int argc, char** argv)
         pathToSDKUtf8.c_str()
     };
 
-    // Mandatory so we know that they are provided
-    std::string modelDir = parser.get("models");
-
-    // Defaults
-    auto audioFile = parser.get("audio");
-    auto guidASR = parser.get("asr-guid");
-    auto guidGPT = parser.get("gpt-guid");
-    auto cloudToken = parser.get("token");
-    size_t vramBudgetMB = (size_t)atoi(parser.get("vram").c_str());
-
-#ifdef NVIGI_LINUX
-    auto wav = read(audioFile.c_str());
-    if (wav.empty())
-    {
-        loggingCallback(nvigi::LogType::eError, "Could not load input WAV file");
-        return -1;
-    }
-#endif
-
-    //////////////////////////////////////////////////////////////////////////////
-    //! Init NVIGI
-    //! 
-
     nvigi::Preferences pref{};
     pref.logLevel = nvigi::LogLevel::eVerbose;
     pref.showConsole = true;
@@ -396,21 +371,35 @@ int main(int argc, char** argv)
     pref.logMessageCallback = pref.showConsole ? (nvigi::PFun_LogMessageCallback*)nullptr : loggingCallback; // avoid duplicating logs in the console
     pref.utf8PathToLogsAndData = pathToSDKUtf8.c_str();
 
-    uint32_t n_threads = 4;
-
     if (NVIGI_FAILED(result, ptr_nvigiInit(pref, nullptr, nvigi::kSDKVersion)))
     {
         loggingCallback(nvigi::LogType::eError, "NVIGI init failed");
         return -1;
     }
 
-    //////////////////////////////////////////////////////////////////////////////
-    //! Init Plugin Interfaces and Instances
-    //! 
+    return 0;
+}
 
+int ShutdownNVIGI()
+{
+    if (NVIGI_FAILED(result, ptr_nvigiShutdown()))
+    {
+        loggingCallback(nvigi::LogType::eError, "Error in 'nvigiShutdown'");
+        return -1;
+    }
+
+    FreeLibrary(nvigiCtx.coreLib);
+
+    return 0;
+}
+
+///////////////////////////////////////
+//! ASR Init and Release
+
+int InitASR(const std::string& modelDir, const std::string& guidASR, size_t vramBudgetMB)
+{
     //! ASR Interface and Instance
-    nvigi::IAutoSpeechRecognition* iasr{};
-    if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigi::plugin::asr::ggml::cuda::kId, &iasr,ptr_nvigiLoadInterface)))
+    if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigi::plugin::asr::ggml::cuda::kId, &nvigiCtx.iasr, ptr_nvigiLoadInterface)))
     {
         loggingCallback(nvigi::LogType::eError, "Could not query ASR interface");
         return -1;
@@ -424,22 +413,45 @@ int main(int argc, char** argv)
         asrCommon.numThreads = n_threads;
         asrCommon.vramBudgetMB = vramBudgetMB;
         asrCommon.modelGUID = guidASR.c_str();
-        asrCommon.chain(asrParams);
+        if (NVIGI_FAILED(result, asrCommon.chain(asrParams)))
+        {
+            loggingCallback(nvigi::LogType::eError, "ASR param chaining failed");
+            return -1;
+        }
     }
 
-    nvigi::InferenceInstance* asr{};
-    if(NVIGI_FAILED(result, iasr->createInstance(asrCommon, &asr)))
+    if (NVIGI_FAILED(result, nvigiCtx.iasr->createInstance(asrCommon, &nvigiCtx.asr)))
     {
         loggingCallback(nvigi::LogType::eError, "Could not create ASR instance");
         return -1;
     }
 
+    return 0;
+}
+
+int ReleaseASR()
+{
+    nvigiCtx.iasr->destroyInstance(nvigiCtx.asr);
+
+    // Hard-coded to local
+    if (NVIGI_FAILED(result, ptr_nvigiUnloadInterface(nvigi::plugin::asr::ggml::cuda::kId, nvigiCtx.iasr)))
+    {
+        loggingCallback(nvigi::LogType::eError, "Error in 'nvigiUnloadInterface'");
+        return -1;
+    }
+
+    return 0;
+}
+
+///////////////////////////////////////
+//! GPT Init and Release
+
+int InitGPT(const std::string& modelDir, const std::string& gptMode, const std::string& cloudToken, const std::string& guidGPT, size_t vramBudgetMB)
+{
     //! GPT Interface and Instance
-    nvigi::IGeneralPurposeTransformer* igpt{};
-    auto gptMode = parser.get("gpt");
     //! When using GPT cloud it does not matter which endpoint we are going to hit, they all use the same REST based backend
-    nvigi::PluginID gptId = gptMode == "local" ? nvigi::plugin::gpt::ggml::cuda::kId : nvigi::plugin::gpt::cloud::rest::kId;
-    if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(gptId, &igpt, ptr_nvigiLoadInterface)))
+    nvigiCtx.gptId = gptMode == "local" ? nvigi::plugin::gpt::ggml::cuda::kId : nvigi::plugin::gpt::cloud::rest::kId;
+    if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigiCtx.gptId, &nvigiCtx.igpt, ptr_nvigiLoadInterface)))
     {
         loggingCallback(nvigi::LogType::eError, "Could not query GPT interface");
         return -1;
@@ -455,7 +467,11 @@ int main(int argc, char** argv)
     gptCommon.utf8PathToModels = modelDir.c_str();
     gptCommon.numThreads = n_threads;
     // Chain together specific and common
-    gptCommon.chain(gptParams);
+    if (NVIGI_FAILED(result, gptCommon.chain(gptParams)))
+    {
+        loggingCallback(nvigi::LogType::eError, "GPT param chaining failed");
+        return -1;
+    }
 
     //! Obtain capabilities and requirements for GPT model(s)
     //! 
@@ -472,7 +488,7 @@ int main(int argc, char** argv)
     //! * provide specific model GUID to obtain CloudCapabilities which include URL and JSON request body for the endpoint used by the model
     //! * provide null model GUID to get a list of ALL models (CloudCapabilities in this case will NOT provide any info)
     //! 
-    
+
     //! Here we are selection option #1 - specific model GUID and VRAM budget
     //! 
     //! To obtain all models we could do something like this:
@@ -484,7 +500,7 @@ int main(int argc, char** argv)
     gptCommon.vramBudgetMB = vramBudgetMB;
 
     nvigi::CommonCapabilitiesAndRequirements* caps{};
-    if (NVIGI_FAILED(result, getCapsAndRequirements(igpt, gptCommon, &caps)))
+    if (NVIGI_FAILED(result, getCapsAndRequirements(nvigiCtx.igpt, gptCommon, &caps)))
     {
         loggingCallback(nvigi::LogType::eError, "'getCapsAndRequirements' failed");
         return -1;
@@ -518,230 +534,341 @@ int main(int argc, char** argv)
         restParams.url = ccaps->url;
         restParams.authenticationToken = cloudToken.c_str();
         restParams.verboseMode = false; // Set to true to debug issues with connection protocol (if any)        
-        gptCommon.chain(restParams);
+        if (NVIGI_FAILED(result, gptCommon.chain(restParams)))
+        {
+            loggingCallback(nvigi::LogType::eError, "REST param chaining failed");
+            return -1;
+        }
     }
-    
-    nvigi::InferenceInstance* gpt{};
-    if (NVIGI_FAILED(result, igpt->createInstance(gptCommon, &gpt)))
+
+    if (NVIGI_FAILED(result, nvigiCtx.igpt->createInstance(gptCommon, &nvigiCtx.gpt)))
     {
         loggingCallback(nvigi::LogType::eError, "Could not create GPT instance");
         return -1;
     }
 
-    //////////////////////////////////////////////////////////////////////////////
-    //! Run inference
-    //! 
+    return 0;
+}
 
-    struct BasicCallbackCtx
+int ReleaseGPT()
+{
+    nvigiCtx.igpt->destroyInstance(nvigiCtx.gpt);
+
+    // Hard-coded to local
+    if (NVIGI_FAILED(result, ptr_nvigiUnloadInterface(nvigiCtx.gptId, nvigiCtx.igpt)))
     {
-        std::mutex callbackMutex;
-        std::condition_variable asrCallbackCV;
-        std::condition_variable gptCallbackCV;
-        std::atomic<nvigi::InferenceExecutionState> asrCallbackState = nvigi::kInferenceExecutionStateDataPending;
-        std::atomic<nvigi::InferenceExecutionState> gptCallbackState = nvigi::kInferenceExecutionStateDataPending;
-        std::string asrOutput;
-        std::string gptOutput;
+        loggingCallback(nvigi::LogType::eError, "Error in 'nvigiUnloadInterface'");
+        return -1;
+    }
 
-        nvigi::InferenceInstance* gptInstance{};
-        nvigi::InferenceInstance* asrInstance{};
-        bool conversationInitialized = false;
-    };
+    return 0;
+}
+
+///////////////////////////////////////
+//! Full pipeline inference context
+
+struct BasicCallbackCtx
+{
+    std::mutex callbackMutex;
+    std::condition_variable asrCallbackCV;
+    std::condition_variable gptCallbackCV;
+    std::atomic<nvigi::InferenceExecutionState> asrCallbackState = nvigi::kInferenceExecutionStateDataPending;
+    std::atomic<nvigi::InferenceExecutionState> gptCallbackState = nvigi::kInferenceExecutionStateDataPending;
+    std::string asrOutput;
+    std::string gptOutput;
+
+    nvigi::InferenceInstance* gptInstance{};
+    nvigi::InferenceInstance* asrInstance{};
+    bool conversationInitialized = false;
+};
+
+///////////////////////////////////////
+//! ASR inference
+
+nvigi::InferenceExecutionState ASRInferenceDataCallback(const nvigi::InferenceExecutionContext* ctx, nvigi::InferenceExecutionState state, void* userData)
+{
+    auto cbkCtx = (BasicCallbackCtx*)userData;
+    std::scoped_lock lck(cbkCtx->callbackMutex);
+
+    // Outputs from ASR
+    auto slots = ctx->outputs;
+    const nvigi::InferenceDataText* text{};
+    slots->findAndValidateSlot(nvigi::kASRWhisperDataSlotTranscribedText, &text);
+    auto response = std::string(text->getUTF8Text());
+    cbkCtx->asrOutput += response;
+
+    cbkCtx->asrCallbackState.store(state);
+    cbkCtx->asrCallbackCV.notify_one();
+
+    return state;
+}
+
+int ASRInference(BasicCallbackCtx& cbkCtx, nvigi::InferenceDataAudioSTLHelper& audioData, std::string& gptInputText)
+{
+    //! ASR
+    std::vector<nvigi::InferenceDataSlot> slots = { {nvigi::kASRWhisperDataSlotAudio, audioData} };
+    nvigi::InferenceDataSlotArray inputs{ slots.size(), slots.data() };
+
+    nvigi::InferenceExecutionContext asrExecCtx{};
+    asrExecCtx.instance = nvigiCtx.asr;
+    nvigi::ASRWhisperRuntimeParameters runtime{};
+    runtime.sampling = nvigi::ASRWhisperSamplingStrategy::eGreedy;
+    asrExecCtx.runtimeParameters = runtime;
+    asrExecCtx.callback = &ASRInferenceDataCallback;
+    asrExecCtx.callbackUserData = &cbkCtx;
+    asrExecCtx.inputs = &inputs;
+    cbkCtx.asrOutput = "";
+
+    loggingCallback(nvigi::LogType::eInfo, "** Start ASR results\n");
+    cbkCtx.asrCallbackState.store(nvigi::kInferenceExecutionStateDataPending);
+    std::thread infer([&asrExecCtx]()
+        {
+            nvigiCtx.asr->evaluate(&asrExecCtx);
+        });
+
+    // Wait for the ASR to stop returning eDataPending in the callback
+    {
+        std::unique_lock lck(cbkCtx.callbackMutex);
+        cbkCtx.asrCallbackCV.wait(lck, [&cbkCtx]() { return cbkCtx.asrCallbackState != nvigi::kInferenceExecutionStateDataPending; });
+        if (cbkCtx.asrCallbackState != nvigi::kInferenceExecutionStateDone)
+        {
+            loggingCallback(nvigi::LogType::eError, "ASR Inference error!\n");
+            return -1;
+        }
+    }
+    infer.join();
+    loggingCallback(nvigi::LogType::eInfo, (std::string("\nUser Speech: ") + cbkCtx.asrOutput + "\n").c_str());
+    loggingCallback(nvigi::LogType::eInfo, "\n** End ASR results\n");
+    gptInputText = cbkCtx.asrOutput;
+
+    return 0;
+}
+
+///////////////////////////////////////
+//! GPT inference
+
+nvigi::InferenceExecutionState GPTInferenceDataCallback(const nvigi::InferenceExecutionContext* ctx, nvigi::InferenceExecutionState state, void* userData)
+{
+    auto cbkCtx = (BasicCallbackCtx*)userData;
+    std::scoped_lock lck(cbkCtx->callbackMutex);
+
+    // Outputs from GPT
+    auto slots = ctx->outputs;
+    const nvigi::InferenceDataText* text{};
+    slots->findAndValidateSlot(nvigi::kGPTDataSlotResponse, &text);
+    auto response = std::string(text->getUTF8Text());
+    if (cbkCtx->conversationInitialized)
+    {
+        cbkCtx->gptOutput += response;
+        loggingCallback(nvigi::LogType::eInfo, response.c_str());
+
+    }
+
+    cbkCtx->gptCallbackState.store(state);
+    cbkCtx->gptCallbackCV.notify_one();
+
+    return state;
+}
+
+int GPTInference(BasicCallbackCtx& cbkCtx, std::string& gptInputText)
+{
+    //! GPT
+    nvigi::InferenceExecutionContext gptExecCtx{};
+    gptExecCtx.instance = nvigiCtx.gpt;
+    gptExecCtx.callback = &GPTInferenceDataCallback;
+    gptExecCtx.callbackUserData = &cbkCtx;
+    cbkCtx.gptCallbackState.store(nvigi::kInferenceExecutionStateDataPending);
+    cbkCtx.gptOutput = "";
+
+    nvigi::GPTRuntimeParameters runtime{};
+    runtime.seed = -1;
+    runtime.tokensToPredict = 200;
+    runtime.interactive = true;
+    runtime.reversePrompt = "User: ";
+    gptExecCtx.runtimeParameters = runtime;
+
+    nvigi::InferenceDataTextSTLHelper text(gptInputText);
+    std::vector<nvigi::InferenceDataSlot> slots = {
+        {cbkCtx.conversationInitialized ? nvigi::kGPTDataSlotUser : nvigi::kGPTDataSlotSystem, text} };
+    nvigi::InferenceDataSlotArray inputs = { slots.size(), slots.data() };
+    gptExecCtx.inputs = &inputs;
+
+    loggingCallback(nvigi::LogType::eInfo, "** Assistant:\n");
+    cbkCtx.gptCallbackState.store(nvigi::kInferenceExecutionStateDataPending);
+    std::thread infer([&gptExecCtx]()
+        {
+            nvigiCtx.gpt->evaluate(&gptExecCtx);
+        });
+
+    // Wait for the GPT to stop returning eDataPending in the callback
+    {
+        std::unique_lock lck(cbkCtx.callbackMutex);
+        cbkCtx.gptCallbackCV.wait(lck, [&cbkCtx]() { return cbkCtx.gptCallbackState != nvigi::kInferenceExecutionStateDataPending; });
+        if (cbkCtx.gptCallbackState != nvigi::kInferenceExecutionStateDone)
+        {
+            loggingCallback(nvigi::LogType::eError, "GPT Inference error!\n");
+            return -1;
+        }
+    }
+    infer.join();
+
+    return 0;
+}
+
+
+///////////////////////////////////////
+//! Full-sequence inference
+
+int RunInference(bool& hasAudio, nvigi::InferenceDataAudioSTLHelper& audioData, std::string& gptInputText, bool conversationInitialized)
+{
     BasicCallbackCtx cbkCtx{};
-    cbkCtx.gptInstance = gpt;
-    cbkCtx.asrInstance = asr;
+    cbkCtx.conversationInitialized = conversationInitialized;
+    cbkCtx.gptInstance = nvigiCtx.gpt;
+    cbkCtx.asrInstance = nvigiCtx.asr;
 
-    bool running = true;
-    nvigi::CpuData _audio{};
-    nvigi::InferenceDataAudio audioData{ _audio };
-    bool hasAudio = false;
-    std::string gptInputText = "This is a transcript of a dialog between a user and a helpful AI assistant.\n";
-
-    do
+    if (hasAudio)
     {
-        auto dataCallback = [](const nvigi::InferenceExecutionContext* ctx, nvigi::InferenceExecutionState state, void* userData)->nvigi::InferenceExecutionState
-            {
-                auto cbkCtx = (BasicCallbackCtx*)userData;
-                std::scoped_lock lck(cbkCtx->callbackMutex);
+        if (ASRInference(cbkCtx, audioData, gptInputText))
+            return -1;
+        hasAudio = false;
+    }
 
-                if (ctx->instance == cbkCtx->gptInstance)
-                {
-                    // Outputs from GPT
-                    auto slots = ctx->outputs;
-                    const nvigi::InferenceDataText* text{};
-                    slots->findAndValidateSlot(nvigi::kGPTDataSlotResponse, &text);
-                    auto response = std::string(text->getUTF8Text());
-                    if (cbkCtx->conversationInitialized)
-                    {
-                        cbkCtx->gptOutput += response;
-                        loggingCallback(nvigi::LogType::eInfo, response.c_str());
-                    }
+    if (GPTInference(cbkCtx, gptInputText))
+        return -1;
 
-                    cbkCtx->gptCallbackState.store(state);
-                    cbkCtx->gptCallbackCV.notify_one();
-                }
-                else if (ctx->instance == cbkCtx->asrInstance)
-                {
-                    // Outputs from ASR
-                    auto slots = ctx->outputs;
-                    const nvigi::InferenceDataText* text{};
-                    slots->findAndValidateSlot(nvigi::kASRWhisperDataSlotTranscribedText, &text);
-                    auto response = std::string(text->getUTF8Text());
-                    cbkCtx->asrOutput += response;
+    return 0;
+}
 
-                    cbkCtx->asrCallbackState.store(state);
-                    cbkCtx->asrCallbackCV.notify_one();
-                }
-                else
-                {
-                    assert(!"unknown instance");
-                }
+int main(int argc, char** argv)
+{
 
-                return state;
-            };
+    CommandLineParser parser;
+    parser.add_command("s", "sdk", "sdk location, if none provided assuming exe location", "");
+    parser.add_command("m", "models", "model repo location", "", true);
+    parser.add_command("a", "audio", "audio file location", "", false); // used only for Linux
+    parser.add_command("", "gpt", "gpt mode, 'local' or 'cloud' (model GUID determines cloud endpoint)", "local");
+    parser.add_command("", "gpt-guid", "gpt model guid in registry format", "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}");
+    parser.add_command("", "asr-guid", "asr model guid in registry format", "{5CAD3A03-1272-4D43-9F3D-655417526170}");
+    parser.add_command("t", "token", "authorization token for the cloud provider", "");
+    parser.add_command("t", "token", "authorization token for the cloud provider", "");
+    parser.add_command("", "vram", "the amount of vram to use in MB", "8192");
 
-        //! ASR
-        if (hasAudio)
-        {
-            std::vector<nvigi::InferenceDataSlot> slots = { {nvigi::kASRWhisperDataSlotAudio, &audioData} };
-            nvigi::InferenceDataSlotArray inputs{ slots.size(), slots.data() };
+    try {
+        parser.parse(argc, argv);
+    }
+    catch (std::exception& e)
+    {
+        printf("%s\n\n", e.what());
+        parser.print_help("nvigi.basic");
+        exit(1);
+    }
 
-            nvigi::InferenceExecutionContext asrExecCtx{};
-            asrExecCtx.instance = asr;
-            nvigi::ASRWhisperRuntimeParameters runtime{};
-            runtime.sampling = nvigi::ASRWhisperSamplingStrategy::eGreedy;
-            asrExecCtx.runtimeParameters = runtime;
-            asrExecCtx.callback = dataCallback;
-            asrExecCtx.callbackUserData = &cbkCtx;
-            asrExecCtx.inputs = &inputs;
-            cbkCtx.asrOutput = "";
+    auto pathToSDKArgument = parser.get("sdk");
+    auto pathToSDKUtf8 = pathToSDKArgument.empty() ? getExecutablePath() : pathToSDKArgument;
 
-            loggingCallback(nvigi::LogType::eInfo, "** Start ASR results\n");
-            cbkCtx.asrCallbackState.store(nvigi::kInferenceExecutionStateDataPending);
-            std::thread infer([asr, &asrExecCtx]()
-                {
-                    asr->evaluate(&asrExecCtx);
-                });
+    // Mandatory so we know that they are provided
+    std::string modelDir = parser.get("models");
 
-            // Wait for the ASR to stop returning eDataPending in the callback
-            {
-                std::unique_lock lck(cbkCtx.callbackMutex);
-                cbkCtx.asrCallbackCV.wait(lck, [&cbkCtx]() { return cbkCtx.asrCallbackState != nvigi::kInferenceExecutionStateDataPending; });
-            }
-            infer.join();
-            loggingCallback(nvigi::LogType::eInfo, (std::string("\nUser Speech: ") + cbkCtx.asrOutput + "\n").c_str());
-            loggingCallback(nvigi::LogType::eInfo, "\n** End ASR results\n");
-            gptInputText = cbkCtx.asrOutput;
-            hasAudio = false;
-        }
+    // Defaults
+    auto audioFile = parser.get("audio");
+    size_t vramBudgetMB = (size_t)atoi(parser.get("vram").c_str());
 
-        //! GPT
-        {
-            nvigi::InferenceExecutionContext gptExecCtx{};
-            gptExecCtx.instance = gpt;
-            gptExecCtx.callback = dataCallback;
-            gptExecCtx.callbackUserData = &cbkCtx;
-            cbkCtx.gptCallbackState.store(nvigi::kInferenceExecutionStateDataPending);
-            cbkCtx.gptOutput = "";
-
-            nvigi::GPTRuntimeParameters runtime{};
-            runtime.seed = -1;
-            runtime.tokensToPredict = 200;
-            runtime.interactive = true;
-            runtime.reversePrompt = "User: ";
-            gptExecCtx.runtimeParameters = runtime;
-
-            nvigi::CpuData _text(gptInputText.length() + 1, (const void*)gptInputText.c_str());
-            nvigi::InferenceDataText text(_text);
-            std::vector<nvigi::InferenceDataSlot> slots = { 
-                {cbkCtx.conversationInitialized ? nvigi::kGPTDataSlotUser : nvigi::kGPTDataSlotSystem, &text} };
-            nvigi::InferenceDataSlotArray inputs = { slots.size(), slots.data() };
-            gptExecCtx.inputs = &inputs;
-
-            loggingCallback(nvigi::LogType::eInfo, "** Assistant:\n");
-            cbkCtx.gptCallbackState.store(nvigi::kInferenceExecutionStateDataPending);
-            std::thread infer([gpt, &gptExecCtx]()
-                {
-                    gpt->evaluate(&gptExecCtx);
-                });
-
-            // Wait for the GPT to stop returning eDataPending in the callback
-            {
-                std::unique_lock lck(cbkCtx.callbackMutex);
-                cbkCtx.gptCallbackCV.wait(lck, [&cbkCtx]() { return cbkCtx.gptCallbackState != nvigi::kInferenceExecutionStateDataPending; });
-            }
-            infer.join();
-            cbkCtx.conversationInitialized = true;
-        }
-
-#if NVIGI_WINDOWS
-        loggingCallback(nvigi::LogType::eInfo, "\n** Please continue the converation (enter with no text to start recording your query, 'q' or 'quit' to exit, any other text to type your query\n>:");
-#else
-        loggingCallback(nvigi::LogType::eInfo, "\n** Please continue the converation (enter with no text to use the wav file for prompt, 'q' or 'quit' to exit, any other text to type your query\n>:");
+#ifdef NVIGI_LINUX
+    auto wav = read(audioFile.c_str());
+    if (wav.empty())
+    {
+        loggingCallback(nvigi::LogType::eError, "Could not load input WAV file");
+        return -1;
+    }
 #endif
 
-        std::getline(std::cin, gptInputText);
-        if (gptInputText == "q" || gptInputText == "Q" || gptInputText == "quit")
+    //////////////////////////////////////////////////////////////////////////////
+    //! Init NVIGI
+    if (InitNVIGI(pathToSDKUtf8))
+        return -1;
+
+    //////////////////////////////////////////////////////////////////////////////
+    //! Init Plugin Interfaces and Instances
+    //! 
+    {
+        auto guidASR = parser.get("asr-guid");
+        if (InitASR(modelDir, guidASR, vramBudgetMB))
+            return -1;
+    }
+
+    {
+        auto guidGPT = parser.get("gpt-guid");
+        auto gptMode = parser.get("gpt");
+        auto cloudToken = parser.get("token");
+        if (InitGPT(modelDir, gptMode, cloudToken, guidGPT, vramBudgetMB))
+            return -1;
+    }
+
+    {
+        //////////////////////////////////////////////////////////////////////////////
+        //! Run inference
+        //! 
+        bool running = true;
+        bool hasAudio = false;
+        bool conversationInitialized = false;
+        std::string gptInputText = "This is a transcript of a dialog between a user and a helpful AI assistant.\n";
+
+#ifdef NVIGI_WINDOWS
+        nvigi::InferenceDataAudioSTLHelper audioData;
+#else
+        nvigi::InferenceDataAudioSTLHelper audioData(wav);
+#endif
+
+        do
         {
-            loggingCallback(nvigi::LogType::eInfo, "Exiting - user request\n");
-            running = false;
-        }
-        else if (gptInputText == "")
-        {
+            if (RunInference(hasAudio, audioData, gptInputText, conversationInitialized))
+                return -1;
+
+            conversationInitialized = true;
+
 #if NVIGI_WINDOWS
-            // Record audio
-            nvigi::utils::RecordingInfo* ri = nvigi::utils::startRecordingAudio();
-            loggingCallback(nvigi::LogType::eInfo, "Recording in progress: ask your question or comment and press enter to stop recording\n");
+            loggingCallback(nvigi::LogType::eInfo, "\n** Please continue the converation (enter with no text to start recording your query, 'q' or 'quit' to exit, any other text to type your query\n>:");
+#else
+            loggingCallback(nvigi::LogType::eInfo, "\n** Please continue the converation (enter with no text to use the wav file for prompt, 'q' or 'quit' to exit, any other text to type your query\n>:");
+#endif
+
             std::getline(std::cin, gptInputText);
-            gptInputText = "";
+            if (gptInputText == "q" || gptInputText == "Q" || gptInputText == "quit")
+            {
+                loggingCallback(nvigi::LogType::eInfo, "Exiting - user request\n");
+                running = false;
+            }
+            else if (gptInputText == "")
+            {
+#if NVIGI_WINDOWS
+                // Record audio
+                nvigi::utils::RecordingInfo* ri = nvigi::utils::startRecordingAudio();
+                loggingCallback(nvigi::LogType::eInfo, "Recording in progress: ask your question or comment and press enter to stop recording\n");
+                std::getline(std::cin, gptInputText);
+                gptInputText = "";
 
-            nvigi::utils::stopRecordingAudio(ri, &audioData);
-            hasAudio = true;
-#else
-            _audio.sizeInBytes = wav.size();
-            _audio.buffer = wav.data();
+                nvigi::utils::stopRecordingAudio(ri, &audioData);
+                hasAudio = true;
 #endif
-        }
-        else
-        {
-            // Use the given getline result as the text
-        }
-    } while (running);
-
+            }
+            else
+            {
+                // Use the given getline result as the text
+            }
+        } while (running);
+    }
 
     //////////////////////////////////////////////////////////////////////////////
     //! Shutdown NVIGI
     //! 
-
-    igpt->destroyInstance(gpt);
-    iasr->destroyInstance(asr);
-
-
-
-
-    // Hard-coded to local
-    if (NVIGI_FAILED(result, ptr_nvigiUnloadInterface(nvigi::plugin::asr::ggml::cuda::kId, iasr)))
-    {
-        loggingCallback(nvigi::LogType::eError, "Error in 'nvigiUnloadInterface'");
+    if (ReleaseASR())
         return -1;
-    }
 
-    // Can be cloud or local
-    if (NVIGI_FAILED(result, ptr_nvigiUnloadInterface(gptId, igpt)))
-    {
-        loggingCallback(nvigi::LogType::eError, "Error in 'nvigiUnloadInterface'");
+    if (ReleaseGPT())
         return -1;
-    }
 
-    if(NVIGI_FAILED(result, ptr_nvigiShutdown()))
-    {
-        loggingCallback(nvigi::LogType::eError, "Error in 'nvigiShutdown'");
+    if (ShutdownNVIGI())
         return -1;
-    }
-
-    FreeLibrary(lib);
-
-    return 0;
-
 
     return 0;
 }

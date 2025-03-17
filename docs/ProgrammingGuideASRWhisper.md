@@ -7,7 +7,7 @@ Please read the `docs/ProgrammingGuideAI.md` located in the NVIGI Core package t
 
 > **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the  [basic sample](../source/samples/nvigi.basic/basic.cpp)
 
-## Version 1.0.0 General Access
+## Version 1.1.0 General Access
 
 ## 1.0 INITIALIZE AND SHUTDOWN
 
@@ -15,7 +15,7 @@ Please read the `docs/ProgrammingGuide.md` located in the NVIGI Core package to 
 
 ## 2.0 OBTAIN ASR INTERFACE
 
-Next, we need to retrieve ASR's API interface based on what variant we need (CPU, CUDA etc.)   **NOTE** only the local inference plugins are provided/supported in this early release.  The cloud plugins will be added in a later release:
+Next, we need to retrieve ASR's API interface based on what variant we need (CPU, CUDA, etc.)   **NOTE** only the local inference plugins are provided/supported in this early release.  The cloud plugins will be added in a later release:
 
 ```cpp
 
@@ -39,6 +39,8 @@ Now that we have our interface we can use it to create our ASR instance. To do t
 We can obtain this information by requesting capabilities and requirements for a model or models. 
 
 ### 3.1 OBTAIN CAPABILITIES AND REQUIREMENTS FOR MODEL(S)
+
+> **IMPORTANT NOTE**: This section covers a scenario where the host application can instantiate models that were not included when the application was packaged and shipped. If the models and their capabilities are predefined and there is no need for dynamically downloaded models, you can skip to the next section.
 
 There are few options here:
 
@@ -77,8 +79,9 @@ for (size_t i = 0; i < caps->numSupportedModels; i++)
 }
 ```
 
-Once we know which model we want here is an example on how to create an instance for it:
+### 3.2 CREATE MODEL INSTANCE
 
+Once we know which model we want here is an example on how to create an instance for it:
 
 Here is an example:
 
@@ -91,13 +94,23 @@ nvigi::InferenceInstance* asrInstanceLocal;
     common.vramBudgetMB = myVRAMBudget;  // How much VRAM is instance allowed to occupy
     common.utf8PathToModels = myPathToNVIGIModelRepository; // Path to provided NVIGI model repository (using UTF-8 encoding)
     common.modelGUID = "{5CAD3A03-1272-4D43-9F3D-655417526170}"; // Model GUID for Whisper, for details please see NVIGI models repository
-    params.chain(common);
-
-    //! Optional but highly recommended if using D3D context, if NOT provided performance might not be optimal
+    if(NVIGI_FAILED(params.chain(common)))
+    {
+        // handle error
+    }
+```
+Next we need to provide information about D3D12 properties if our application is planning to leverage `CiG` (CUDA In Graphics)
+```cpp
     nvigi::D3D12Parameters d3d12Params{};
     d3d12Params.device = myDevice;
-    d3d12Params.queue = myQueue;
-    params2.chain(d3d12Params);
+    d3d12Params.queue = myDirectQueue; // mandatory to use CIG
+    d3d12Params.queueCompute = myComputeQueue; // optional
+    d3d12Params.queueCopy = myCopyQueue; // optional
+    if(NVIGI_FAILED(params.chain(d3d12Params)))
+    {
+        // handle error
+    }
+
     
     if(NVIGI_FAILED(res, iasrLocal->createInstance(params, &asrInstanceLocal)))
     {
@@ -105,8 +118,6 @@ nvigi::InferenceInstance* asrInstanceLocal;
     }
 }
 ```
-
-> **IMPORTANT**: Providing D3D or Vulkan device and queue is highly recommended to ensure optimal performance
 
 ## 4.0 AUDIO INPUT
 
@@ -128,8 +139,7 @@ if(audioInfo == nullptr)
 //! Incoming audio is stored in special inference audio variable
 //! 
 //! 16000 samples mono WAVE suitable for use with most ASR models
-nvigi::CpuData audioData;
-nvigi::InferenceDataAudio wavData(audioData);
+nvigi::InferenceDataAudioSTLHelper wavData;
 if(!AudioRecordingHelper::StopRecordingAudio(audioInfo, &wavData)) 
 { 
     //! Check error 
@@ -164,13 +174,8 @@ else if(lastChunk)
 
 ```cpp
 // Can be full audio clip or streamed audio chunk, in this case pcm16 as the most commonly used audio format
-std::vector<int16> pcm16 = getMyAudio();
-nvigi::CpuData _audio{pcm16.size() * sizeof(int16_t), pcm16.data()}; 
-nvigi::InferenceDataAudio audio{_audio};
-//! These are defaults and required to run inference with the OpenAI Whisper model
-audio.bitsPerSample = 16;
-audio.samplingRate = 16000;
-audio.channels = 1;
+std::vector<int16> pcm16 = getMyMonoAudio();
+nvigi::InferenceDataAudioSTLHelper audio{pmc16, 1}; // assuming single channel mono audio
 ```
 
 ## 5.0 SETUP CALLBACK TO RECEIVE INFERRED DATA
@@ -226,7 +231,7 @@ Before ASR can be evaluated the `nvigi::InferenceExecutionContext` needs to be d
 
 ```cpp
 //! Audio data slot is coming from our previous step
-std::vector<nvigi::InferenceDataSlot> slots = { {nvigi::kASRDataSlotAudio, &audio} };
+std::vector<nvigi::InferenceDataSlot> slots = { {nvigi::kASRDataSlotAudio, audio} };
 nvigi::InferenceDataSlotArray inputs = { slots.size(), slots.data() }; // Input slots
 
 //! OPTIONAL Runtime parameters, we can for example switch between Greedy or BeamSearch sampling strategies
@@ -267,7 +272,10 @@ if(useASR)
         {
             audioChunkInfo.type = nvigi::StreamSignalType::eStreamStop;
         }
-        asrRuntime.chain(audioChunkInfo);
+        if(NVIGI_FAILED(asrRuntime.chain(audioChunkInfo)))
+        {
+            // handle error
+        }
 
         // IMPORTANT: In this case execution context and all input data MUST BE VALID while audio streaming is active
         if(NVIGI_FAILED(res, asrContext.instance->evaluateAsync(asrContext)))
@@ -311,4 +319,68 @@ if(NVIGI_FAILED(result, nvigiUnloadInterface(nvigi::plugin::asr::ggml::cuda::kId
 { 
     //! Check error
 } 
+```
+
+## APPENDIX
+
+### MEMORY TRACKING 
+
+#### CUDA
+
+NVIGI provides callback mechanism to track/allocated/free GPU resources as defined in the `nvigi_cuda.h` header. Here is an example:
+
+```cpp
+// Callback implementations
+void MallocReportCallback(void* ptr, size_t size, void* user_context) {
+    auto* context = static_cast<int*>(user_context);
+    std::cout << "Malloc Report: Allocated " << size << " bytes at " << ptr 
+              << " (User context value: " << *context << ")\n";
+}
+
+void FreeReportCallback(void* ptr, size_t size, void* user_context) {
+    auto* context = static_cast<int*>(user_context);
+    std::cout << "Free Report: Freed memory at " << ptr 
+              << " (User context value: " << *context << ")\n";
+}
+
+int32_t MallocCallback(void** ptr, size_t size, int device, bool managed, bool hip, void* user_context) {
+    auto* context = static_cast<int*>(user_context);
+    *ptr = malloc(size); // Simulate CUDA malloc
+    if (*ptr) {
+        std::cout << "Malloc Callback: Allocated " << size << " bytes on device " << device 
+                  << " (Managed: " << managed << ", HIP: " << hip << ", Context: " << *context << ")\n";
+        return 0; // Success
+    }
+    return -1; // Failure
+}
+
+int32_t FreeCallback(void* ptr, void* user_context) {
+    auto* context = static_cast<int*>(user_context);
+    if (ptr) {
+        free(ptr); // Simulate CUDA free
+        std::cout << "Free Callback: Freed memory at " << ptr 
+                  << " (User context value: " << *context << ")\n";
+        return 0; // Success
+    }
+    return -1; // Failure
+}
+
+// Example usage
+CudaParameters params{};
+
+// User context for tracking (e.g., an integer counter)
+int userContextValue = 42;
+
+// Set up callbacks
+params.cudaMallocReportCallback = MallocReportCallback;
+params.cudaMallocReportUserContext = &userContextValue;
+
+params.cudaFreeReportCallback = FreeReportCallback;
+params.cudaFreeReportUserContext = &userContextValue;
+
+params.cudaMallocCallback = MallocCallback;
+params.cudaMallocUserContext = &userContextValue;
+
+params.cudaFreeCallback = FreeCallback;
+params.cudaFreeUserContext = &userContextValue;
 ```

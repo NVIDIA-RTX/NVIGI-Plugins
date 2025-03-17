@@ -148,7 +148,7 @@ nvigi::Result OnnxgenaiEvaluate(nvigi::InferenceExecutionContext* execCtx)
                 //! Temporary outputs for the callback since host did not provide any
                 nvigi::CpuData text{ response.length() + 1, (void*)response.c_str() };
                 nvigi::InferenceDataText data(text);
-                std::vector<nvigi::InferenceDataSlot> slots = { {kGPTDataSlotResponse, &data} };
+                std::vector<nvigi::InferenceDataSlot> slots = { {kGPTDataSlotResponse, data} };
                 nvigi::InferenceDataSlotArray outputs = { slots.size(), slots.data() };
                 execCtx->outputs = &outputs;
                 res = execCtx->callback(execCtx, nvigi::kInferenceExecutionStateDone, execCtx->callbackUserData);

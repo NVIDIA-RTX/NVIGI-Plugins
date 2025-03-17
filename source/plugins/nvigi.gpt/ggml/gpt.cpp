@@ -28,6 +28,8 @@
 #include "source/utils/nvigi.hwi/cuda/push_poppable_cuda_context.h"
 #include <cuda.h>
 #include <cuda_runtime.h>
+
+#include "nvtx3/nvToolsExt.h"
 #endif
 
 namespace nvigi
@@ -92,9 +94,13 @@ struct InferenceContext
     json modelInfo;
 
 #ifndef NVIGI_GPT_GFN_NVCF
-    llama_model* llamaModel{};
-    llama_context* llamaContext{};
+    common_init_result llamaContext{};
     clip_ctx* clipContext{};
+#endif
+
+#if GGML_USE_CUBLAS
+    // Used to set the relative priority of GPU inference and graphics
+    std::vector<cudaStream_t> cuda_streams;
 #endif
 
 #if GGML_USE_CUBLAS
@@ -157,7 +163,9 @@ struct GPTContext
     // Caps and requirements
     ai::CommonCapsData capsData;
 
-
+#ifdef GGML_USE_CUBLAS
+    nvigi::IHWICuda* icig{};
+#endif
 };
 
 nvigi::Result evaluate(nvigi::InferenceExecutionContext* execCtx);
@@ -200,14 +208,17 @@ nvigi::Result ggmlDestroyInstance(const nvigi::InferenceInstance* instance)
         }
 
         {
+#ifdef GGML_USE_CUBLAS
             nvigi::RuntimeContextScope scope(*gptInstance);
+#endif
 			if (gptInstance->clipContext != nullptr)
             {
                 clip_free(gptInstance->clipContext);
                 gptInstance->clipContext = nullptr;
             }
-            llama_free_model(gptInstance->llamaModel);
-            llama_free(gptInstance->llamaContext);
+            gptInstance->llamaContext.model.reset();
+            gptInstance->llamaContext.context.reset();
+            gptInstance->llamaContext.lora.clear();
         }
 
         delete gptInstance;
@@ -231,6 +242,21 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
         return kResultInvalidParameter;
     }
 
+#ifdef GGML_USE_CUBLAS
+    auto cudaParams = findStruct<CudaParameters>(_params);
+    if (cudaParams && cudaParams->getVersion() >= kStructVersion2 )
+    {
+        if (cudaParams->cudaMallocReportCallback)
+            nvigi::gpt::setCudaMallocReportCallback(cudaParams->cudaMallocReportCallback, cudaParams->cudaMallocReportUserContext);
+        if (cudaParams->cudaFreeReportCallback)
+            nvigi::gpt::setCudaFreeReportCallback(cudaParams->cudaFreeReportCallback, cudaParams->cudaFreeReportUserContext);
+        if (cudaParams->cudaMallocCallback)
+            nvigi::gpt::setCudaMallocCallback(cudaParams->cudaMallocCallback, cudaParams->cudaMallocUserContext);
+        if (cudaParams->cudaFreeCallback)
+            nvigi::gpt::setCudaFreeCallback(cudaParams->cudaFreeCallback, cudaParams->cudaFreeUserContext);
+    }
+#endif
+
     *_instance = nullptr;
 
     auto instanceData = new nvigi::gpt::InferenceContext(_params);
@@ -253,7 +279,7 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
             system::VRAMUsage* usage;
             system::getInterface()->getVRAMStats(0, &usage);
             currentUsageMB = usage->currentUsageMB - currentUsageMB;
-            auto n_layers = llama_n_layer(instanceData->llamaModel);
+            auto n_layers = llama_model_n_layer(instanceData->llamaContext.model.get());
             NVIGI_LOG_INFO("New instance vram : %lluMB [budget : %lluMB, total : %lluMB] - n_layers : %d", currentUsageMB, common->vramBudgetMB, usage->budgetMB, n_layers);
         }
     );
@@ -273,26 +299,42 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
     auto sampler = findStruct<GPTSamplerParameters>(_params);
     if (sampler)
     {
-        instanceData->params.sparams.n_prev = sampler->numPrev;
-        instanceData->params.sparams.n_probs = sampler->numProbs;
-        instanceData->params.sparams.min_keep = sampler->minKeep;
-        instanceData->params.sparams.top_k = sampler->topK;
-        instanceData->params.sparams.min_p = sampler->minP;
-        instanceData->params.sparams.xtc_probability = sampler->xtcProbability;
-        instanceData->params.sparams.xtc_threshold = sampler->xtcThreshold;
-        instanceData->params.sparams.tfs_z = sampler->tfsZ;
-        instanceData->params.sparams.typ_p = sampler->typP;
-        instanceData->params.sparams.dynatemp_range = sampler->dynatempRange;
-        instanceData->params.sparams.dynatemp_exponent = sampler->dynatempExponent;
-        instanceData->params.sparams.penalty_last_n = sampler->penaltyLastN;
-        instanceData->params.sparams.penalty_repeat = sampler->penaltyRepeat;
-        instanceData->params.sparams.penalty_freq = sampler->penaltyFreq;
-        instanceData->params.sparams.penalty_present = sampler->penaltyPresent;
-        instanceData->params.sparams.mirostat = sampler->mirostat;
-        instanceData->params.sparams.mirostat_tau = sampler->mirostatTAU;
-        instanceData->params.sparams.mirostat_eta = sampler->mirostatETA;
-        instanceData->params.sparams.penalize_nl = sampler->penalizeNewLine;
-        instanceData->params.sparams.ignore_eos = sampler->ignoreEOS;
+        instanceData->params.sampling.n_prev = sampler->numPrev;
+        instanceData->params.sampling.n_probs = sampler->numProbs;
+        instanceData->params.sampling.min_keep = sampler->minKeep;
+        instanceData->params.sampling.top_k = sampler->topK;
+        instanceData->params.sampling.min_p = sampler->minP;
+        instanceData->params.sampling.xtc_probability = sampler->xtcProbability;
+        instanceData->params.sampling.xtc_threshold = sampler->xtcThreshold;
+        //instanceData->params.sampling.tfs_z = sampler->tfsZ;
+        instanceData->params.sampling.typ_p = sampler->typP;
+        instanceData->params.sampling.dynatemp_range = sampler->dynatempRange;
+        instanceData->params.sampling.dynatemp_exponent = sampler->dynatempExponent;
+        instanceData->params.sampling.penalty_last_n = sampler->penaltyLastN;
+        instanceData->params.sampling.penalty_repeat = sampler->penaltyRepeat;
+        instanceData->params.sampling.penalty_freq = sampler->penaltyFreq;
+        instanceData->params.sampling.penalty_present = sampler->penaltyPresent;
+        instanceData->params.sampling.mirostat = sampler->mirostat;
+        instanceData->params.sampling.mirostat_tau = sampler->mirostatTAU;
+        instanceData->params.sampling.mirostat_eta = sampler->mirostatETA;
+        //instanceData->params.sampling.penalize_nl = sampler->penalizeNewLine;
+        instanceData->params.sampling.ignore_eos = sampler->ignoreEOS;
+    }
+
+    // Optional
+    auto runtime = findStruct<GPTRuntimeParameters>(_params);
+    if (runtime)
+    {
+        instanceData->params.sampling.seed = runtime->seed;
+        instanceData->params.n_predict = runtime->tokensToPredict;
+        instanceData->params.n_keep = runtime->tokensToKeep;
+        instanceData->params.n_batch = runtime->batchSize;
+        instanceData->params.n_chunks = runtime->numChunks;
+        instanceData->params.n_parallel = runtime->numParallel;
+        instanceData->params.n_sequences = runtime->numSequences;
+        instanceData->params.interactive = runtime->interactive;
+        instanceData->params.sampling.temp = runtime->temperature;
+        instanceData->params.sampling.top_p = runtime->topP;
     }
 
     {
@@ -368,8 +410,9 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
         NVIGI_LOG_VERBOSE("# batch %d", instanceData->params.n_batch);
 
         {
+#ifdef GGML_USE_CUBLAS
             nvigi::RuntimeContextScope scope(*instanceData);
-
+#endif
             if (!ctx.initialized)
             {
                 llama_backend_init();
@@ -377,9 +420,26 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
                 ctx.initialized = true;
             }
 
-            common_init_result llama_init = common_init_from_params(instanceData->params);
-            instanceData->llamaModel = llama_init.model;
-            instanceData->llamaContext = llama_init.context;
+            instanceData->llamaContext = common_init_from_params(instanceData->params);
+            
+#if GGML_USE_CUBLAS
+            // We ask llama for all the cuda_streams it is going to use and 
+            // store them to enable us to change their priorities dynamically
+            size_t stream_count = llama_get_cuda_stream_count(instanceData->llamaContext.context.get());
+            instanceData->cuda_streams.resize(stream_count);
+            llama_get_cuda_streams(instanceData->llamaContext.context.get(), (void**)instanceData->cuda_streams.data(), stream_count);
+
+
+            if (ctx.icig->getVersion() >= 2)
+            {
+                // Apply the global priority to all streams
+                nvigi::Result cuerr = ctx.icig->cudaApplyGlobalGpuInferenceSchedulingMode(instanceData->cuda_streams.data(), instanceData->cuda_streams.size());
+                if (cuerr != kResultOk)
+                {
+                    NVIGI_LOG_WARN("Could not set relative priority of compute and graphics. Please use 575 driver or higher\n");
+                }
+            }
+#endif
 
             if (!instanceData->params.mmproj.empty())
             {
@@ -387,7 +447,7 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
                 instanceData->clipContext = clip_model_load(clip_path, /*verbosity=*/ 1);
             }
 
-            if (!instanceData->llamaModel)
+            if (!instanceData->llamaContext.model)
             {
                 delete instanceData;
                 return kResultInvalidState;
@@ -448,6 +508,10 @@ nvigi::Result ggmlGetCapsAndRequirements(nvigi::NVIGIParameter** _info, const nv
 
 nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async)
 {
+#if GGML_USE_CUBLAS
+    nvtxRangePushA("ggmlEvaluate");
+#endif
+
     auto& ctx = (*gpt::getContext());
 
     // Validate all inputs first
@@ -507,7 +571,7 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
             //! Temporary outputs for the callback since host did not provide any
             nvigi::CpuData text{response.length() + 1, (const void*)response.c_str()};
             nvigi::InferenceDataText data(text);            
-            std::vector<nvigi::InferenceDataSlot> slots = { {kGPTDataSlotResponse, &data} };
+            std::vector<nvigi::InferenceDataSlot> slots = { {kGPTDataSlotResponse, data} };
             nvigi::InferenceDataSlotArray outputs = { slots.size(), slots.data() };
             execCtx->outputs = &outputs;
             res = execCtx->callback(execCtx, state, execCtx->callbackUserData);
@@ -525,6 +589,20 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
         NVIGI_LOG_ERROR("Instance is in invalid state and it must be destroyed and recreated, check previous evaluate calls or result callbacks for errors");
         return result;
     }
+
+#if GGML_USE_CUBLAS
+    // We apply the global scheduling mode to our streams at every evaluate() 
+    // to reflect any changes the user made to the global mode between calls
+
+    if (ctx.icig->getVersion() >= 2)
+    {
+        nvigi::Result err = ctx.icig->cudaApplyGlobalGpuInferenceSchedulingMode(instance->cuda_streams.data(), instance->cuda_streams.size());
+        if (err != kResultOk)
+        {
+            NVIGI_LOG_WARN_ONCE("Could not set relative priority of compute and graphics, insufficient driver\n");
+        }
+    }
+#endif
 
     //NVIGI_LOG_VERBOSE("Processing input '%s' on %u threads...", input, ctx.params.n_threads);
 
@@ -547,17 +625,16 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
         // Make sure async job is not running when we modify parameters
         std::lock_guard<std::mutex> lock(instance->sync.mtx);
 
-        instance->params.sparams.seed = runtime->seed;
+        instance->params.sampling.seed = runtime->seed;
         instance->params.n_predict = runtime->tokensToPredict;
         instance->params.n_keep = runtime->tokensToKeep;
-        instance->params.n_draft = runtime->tokensToDraft;
         instance->params.n_batch = runtime->batchSize;
         instance->params.n_chunks = runtime->numChunks;
         instance->params.n_parallel = runtime->numParallel;
         instance->params.n_sequences = runtime->numSequences;
         instance->params.interactive = runtime->interactive;
-        instance->params.sparams.temp = runtime->temperature;
-        instance->params.sparams.top_p = runtime->topP;
+        instance->params.sampling.temp = runtime->temperature;
+        instance->params.sampling.top_p = runtime->topP;
         if (runtime->reversePrompt)
         {
             if (instance->params.antiprompt.empty() || instance->params.antiprompt.back() != runtime->reversePrompt)
@@ -586,26 +663,33 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
         // Make sure async job is not running when we modify parameters
         std::lock_guard<std::mutex> lock(instance->sync.mtx);
 
-        instance->params.sparams.n_prev = sampler->numPrev;
-        instance->params.sparams.n_probs = sampler->numProbs;
-        instance->params.sparams.min_keep = sampler->minKeep;
-        instance->params.sparams.top_k = sampler->topK;
-        instance->params.sparams.min_p = sampler->minP;
-        instance->params.sparams.xtc_probability = sampler->xtcProbability;
-        instance->params.sparams.xtc_threshold = sampler->xtcThreshold;
-        instance->params.sparams.tfs_z = sampler->tfsZ;
-        instance->params.sparams.typ_p = sampler->typP;
-        instance->params.sparams.dynatemp_range = sampler->dynatempRange;
-        instance->params.sparams.dynatemp_exponent = sampler->dynatempExponent;
-        instance->params.sparams.penalty_last_n = sampler->penaltyLastN;
-        instance->params.sparams.penalty_repeat = sampler->penaltyRepeat;
-        instance->params.sparams.penalty_freq = sampler->penaltyFreq;
-        instance->params.sparams.penalty_present = sampler->penaltyPresent;
-        instance->params.sparams.mirostat = sampler->mirostat;
-        instance->params.sparams.mirostat_tau = sampler->mirostatTAU;
-        instance->params.sparams.mirostat_eta = sampler->mirostatETA;
-        instance->params.sparams.penalize_nl = sampler->penalizeNewLine;
-        instance->params.sparams.ignore_eos = sampler->ignoreEOS;
+        instance->params.sampling.n_prev = sampler->numPrev;
+        instance->params.sampling.n_probs = sampler->numProbs;
+        instance->params.sampling.min_keep = sampler->minKeep;
+        instance->params.sampling.top_k = sampler->topK;
+        instance->params.sampling.min_p = sampler->minP;
+        instance->params.sampling.xtc_probability = sampler->xtcProbability;
+        instance->params.sampling.xtc_threshold = sampler->xtcThreshold;
+        //instance->params.sampling.tfs_z = sampler->tfsZ;
+        instance->params.sampling.typ_p = sampler->typP;
+        instance->params.sampling.dynatemp_range = sampler->dynatempRange;
+        instance->params.sampling.dynatemp_exponent = sampler->dynatempExponent;
+        instance->params.sampling.penalty_last_n = sampler->penaltyLastN;
+        instance->params.sampling.penalty_repeat = sampler->penaltyRepeat;
+        instance->params.sampling.penalty_freq = sampler->penaltyFreq;
+        instance->params.sampling.penalty_present = sampler->penaltyPresent;
+        instance->params.sampling.mirostat = sampler->mirostat;
+        instance->params.sampling.mirostat_tau = sampler->mirostatTAU;
+        instance->params.sampling.mirostat_eta = sampler->mirostatETA;
+        //instance->params.sampling.penalize_nl = sampler->penalizeNewLine;
+        instance->params.sampling.ignore_eos = sampler->ignoreEOS;
+        // New parameters so always make sure we have the latest version
+        if (sampler->getVersion() >= 2)
+        {
+            instance->params.sampling.grammar = sampler->grammar ? sampler->grammar : "";
+            instance->sync.persistentKVCache.store(sampler->persistentKVCache);
+            instance->params.path_prompt_cache = sampler->utf8PathToSessionCache ? sampler->utf8PathToSessionCache : "";
+        }
     }
 
     std::string system = systemSlot ? systemSlot->getUTF8Text() : "";
@@ -675,6 +759,7 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
 
     if (instance->params.interactive)
     {
+        instance->params.conversation_mode = COMMON_CONVERSATION_MODE_ENABLED;
         // Interactive (chat) mode
         if (instance->sync.job.valid())
         {
@@ -689,9 +774,12 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
                 instance->sync.runningChat.store(true);
                 instance->sync.execCtx = execCtx;
                 
+                if(!instance->sync.persistentKVCache.load())
                 {
+#ifdef GGML_USE_CUBLAS
                     nvigi::RuntimeContextScope scope(*instance);
-                    llama_kv_cache_clear(instance->llamaContext);
+#endif
+                    llama_kv_cache_clear(instance->llamaContext.context.get());
                 }
 
                 // Prepare prompt based on model's template
@@ -705,8 +793,10 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
                 std::future<void> runningWithMtxLocked = instance->sync.runningWithMutexLockedPromise.get_future();
                 instance->sync.job = std::async(std::launch::async, [instance, responseCallback]()->nvigi::Result
                 {
+#ifdef GGML_USE_CUBLAS
                     nvigi::RuntimeContextScope scope(*instance);
-                    if (generate(&instance->sync, instance->llamaModel, instance->llamaContext, instance->clipContext, instance->params, responseCallback))
+#endif
+                    if (generate(&instance->sync, instance->llamaContext.model.get(), instance->llamaContext.context.get(), instance->clipContext, instance->params, responseCallback))
                     {
                         instance->state.store(nvigi::kInferenceExecutionStateInvalid);
                         responseCallback(instance->sync.execCtx, -1, "", nvigi::kInferenceExecutionStateInvalid);
@@ -777,8 +867,10 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
             // First time initializing our job
             instance->sync.job = std::async(std::launch::async, [instance, responseCallback]()->nvigi::Result
             {
+#ifdef GGML_USE_CUBLAS
                 nvigi::RuntimeContextScope scope(*instance);
-                if (generate(&instance->sync, instance->llamaModel, instance->llamaContext, instance->clipContext, instance->params, responseCallback))
+#endif
+                if (generate(&instance->sync, instance->llamaContext.model.get(), instance->llamaContext.context.get(), instance->clipContext, instance->params, responseCallback))
                 {
                     instance->state.store(nvigi::kInferenceExecutionStateInvalid);
                     responseCallback(instance->sync.execCtx, -1, "", nvigi::kInferenceExecutionStateInvalid);
@@ -799,6 +891,7 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
     else
     {
         // Instruct mode, prepare prompt based on model's template
+        instance->params.conversation_mode = COMMON_CONVERSATION_MODE_DISABLED;
         if (async)
         {
             if (NVIGI_FAILED(result, flushAndTerminate(instance->sync)))
@@ -815,8 +908,10 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
 
             instance->sync.job = std::async(std::launch::async, [instance, responseCallback]()->nvigi::Result
             {
+#ifdef GGML_USE_CUBLAS
                 nvigi::RuntimeContextScope scope(*instance);
-                if (generate(&instance->sync, instance->llamaModel, instance->llamaContext, instance->clipContext, instance->params, responseCallback))
+#endif
+                if (generate(&instance->sync, instance->llamaContext.model.get(), instance->llamaContext.context.get(), instance->clipContext, instance->params, responseCallback))
                 {
                     instance->state.store(nvigi::kInferenceExecutionStateInvalid);
                     responseCallback(instance->sync.execCtx, -1, "", nvigi::kInferenceExecutionStateInvalid);
@@ -835,13 +930,19 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
             instance->sync.rgb_width = rgb_width;
             instance->sync.rgb_height = rgb_height;
 
+#ifdef GGML_USE_CUBLAS
             nvigi::RuntimeContextScope scope(*instance);
-            if (generate(&instance->sync, instance->llamaModel, instance->llamaContext, instance->clipContext, instance->params, responseCallback))
+#endif
+            if (generate(&instance->sync, instance->llamaContext.model.get(), instance->llamaContext.context.get(), instance->clipContext, instance->params, responseCallback))
             {
                 return kResultInvalidState;
             }
         }
     }
+
+#if GGML_USE_CUBLAS
+    nvtxRangePop();
+#endif
 
     return kResultOk;
 }
@@ -887,7 +988,7 @@ Result nvigiPluginGetInfo(framework::IFramework* framework, nvigi::plugin::Plugi
     *_info = &info;
 
     info.id = gpt::getFeatureId(nullptr);
-    info.description = "ggml backend for GPT model";
+    info.description = "ggml based backend for LLM";
     info.author = "NVIDIA";
     info.build = GIT_BRANCH_AND_LAST_COMMIT;
     info.interfaces = { plugin::getInterfaceInfo<IGeneralPurposeTransformer>()};
@@ -919,6 +1020,14 @@ Result nvigiPluginRegister(framework::IFramework* framework)
 
     ctx.feature = gpt::getFeatureId(nullptr);
 
+#if GGML_USE_CUBLAS
+    if (!framework::getInterface(plugin::getContext()->framework, plugin::hwi::cuda::kId, &ctx.icig))
+    {
+        NVIGI_LOG_ERROR("Missing interface from 'nvigi.plugin.hwi.cuda'");
+        return kResultInvalidState;
+    }
+#endif
+
     ctx.api.createInstance = gpt::createInstance;
     ctx.api.destroyInstance = gpt::destroyInstance;
     ctx.api.getCapsAndRequirements = gpt::getCapsAndRequirements;
@@ -943,12 +1052,16 @@ Result nvigiPluginDeregister()
 
     ai::freeCommonCapsAndRequirements(ctx.capsData);
 
+#if GGML_USE_CUBLAS
+    framework::releaseInterface(plugin::getContext()->framework, plugin::hwi::cuda::kId, ctx.icig);
+    ctx.icig = nullptr;
+#endif
+
     // call this to flush any threads waiting to write to disk
     common_log_pause(common_log_main());
 
     llama_backend_free();
 
-#if defined(GGML_USE_CUBLAS)
     // cpu 
     // Note, GPT hasn't shown the same crash as Embed, but could be susceptible to it as well.
     // Reference:  https://ofekshilon.com/2017/11/03/on-omp_wait_policy/
@@ -968,7 +1081,6 @@ Result nvigiPluginDeregister()
 
     // So this seems to be the least of evils - wait for the OpenMP threads to spinwait stop and then proceed with shutdown.
     std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-#endif 
 
     return kResultOk;
 }

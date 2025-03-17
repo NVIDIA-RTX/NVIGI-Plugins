@@ -28,6 +28,7 @@ namespace fs = std::filesystem;
 #include "nvigi_embed.h"
 #include "nvigi_gpt.h"
 #include "nvigi_types.h"
+#include <nvigi_stl_helpers.h>
 
 #if NVIGI_LINUX
 #include <unistd.h>
@@ -50,7 +51,7 @@ typedef struct __LUID
 #endif
 
 #define DECLARE_NVIGI_CORE_FUN(F) PFun_##F* ptr_##F
-#define GET_NVIGI_CORE_FUN(F) ptr_##F = (PFun_##F*)GetProcAddress(lib, #F)
+#define GET_NVIGI_CORE_FUN(lib, F) ptr_##F = (PFun_##F*)GetProcAddress(lib, #F)
 DECLARE_NVIGI_CORE_FUN(nvigiInit);
 DECLARE_NVIGI_CORE_FUN(nvigiShutdown);
 DECLARE_NVIGI_CORE_FUN(nvigiLoadInterface);
@@ -112,85 +113,104 @@ bool unloadInterface(nvigi::PluginID feature, T*& _interface)
     return true;
 }
 
-bool initIGI()
+struct NVIGIAppCtx
 {
-#ifndef DEBUG
-#ifdef NVIGI_WINDOWS
-    FILE* f{};
-    freopen_s(&f, "NUL", "w", stderr);
-#else
-    freopen("dev/nul", "w", stderr);
-#endif
-#endif 
+    HMODULE coreLib{};
 
-    auto exePathUtf8 = getExecutablePath();
+    nvigi::IEmbed* iembed;
+    nvigi::InferenceInstance* embedInst{};
+
+    nvigi::IGeneralPurposeTransformer* igpt{};
+    nvigi::InferenceInstance* gptInst{};
+};
+
+
+
+///////////////////////////////////////
+//! NVIGI Init and Shutdown
+
+int InitNVIGI(NVIGIAppCtx& nvigiCtx, const std::string& pathToSDKUtf8)
+{
 #ifdef NVIGI_WINDOWS
-    auto libPath = exePathUtf8 + "/nvigi.core.framework.dll";
+    auto libPath = pathToSDKUtf8 + "/nvigi.core.framework.dll";
 #else
-    auto libPath = exePathUtf8 + "/nvigi.core.framework.so";
+    auto libPath = pathToSDKUtf8 + "/nvigi.core.framework.so";
 #endif
-    lib = LoadLibraryA(libPath.c_str());
-    if (lib == nullptr)
+    nvigiCtx.coreLib = LoadLibraryA(libPath.c_str());
+    if (nvigiCtx.coreLib == nullptr)
     {
         loggingCallback(nvigi::LogType::eError, "Could not load NVIGI core library");
-        return false;
+        return -1;
     }
 
-    GET_NVIGI_CORE_FUN(nvigiInit);
-    GET_NVIGI_CORE_FUN(nvigiShutdown);
-    GET_NVIGI_CORE_FUN(nvigiLoadInterface);
-    GET_NVIGI_CORE_FUN(nvigiUnloadInterface);
+    GET_NVIGI_CORE_FUN(nvigiCtx.coreLib, nvigiInit);
+    GET_NVIGI_CORE_FUN(nvigiCtx.coreLib, nvigiShutdown);
+    GET_NVIGI_CORE_FUN(nvigiCtx.coreLib, nvigiLoadInterface);
+    GET_NVIGI_CORE_FUN(nvigiCtx.coreLib, nvigiUnloadInterface);
 
     if (ptr_nvigiInit == nullptr || ptr_nvigiShutdown == nullptr ||
         ptr_nvigiLoadInterface == nullptr || ptr_nvigiUnloadInterface == nullptr)
     {
         loggingCallback(nvigi::LogType::eError, "Could not load NVIGI core library");
-        return false;
+        return -1;
     }
 
     const char* paths[] =
     {
-        exePathUtf8.c_str()
+        pathToSDKUtf8.c_str()
     };
 
     nvigi::Preferences pref{};
     pref.logLevel = nvigi::LogLevel::eVerbose;
-    pref.showConsole = false;
+    pref.showConsole = true;
     pref.numPathsToPlugins = 1;
     pref.utf8PathsToPlugins = paths;
-    pref.logMessageCallback = nullptr;
-    pref.utf8PathToLogsAndData = exePathUtf8.c_str();
+    pref.logMessageCallback = pref.showConsole ? (nvigi::PFun_LogMessageCallback*)nullptr : loggingCallback; // avoid duplicating logs in the console
+    pref.utf8PathToLogsAndData = pathToSDKUtf8.c_str();
 
-    auto result = ptr_nvigiInit(pref, nullptr, nvigi::kSDKVersion);
-    if (result != nvigi::kResultOk)
+    if (NVIGI_FAILED(result, ptr_nvigiInit(pref, nullptr, nvigi::kSDKVersion)))
     {
         loggingCallback(nvigi::LogType::eError, "NVIGI init failed");
-        return false;
-    }
-
-    return true;
-}
-
-int32_t shutdownIGI()
-{
-    nvigi::Result result = ptr_nvigiShutdown();
-    if (result != nvigi::kResultOk)
-    {
-        loggingCallback(nvigi::LogType::eError, "Error in NVIGI shutdown");
         return -1;
     }
 
-    FreeLibrary(lib);
+    return 0;
+    }
+
+int ShutdownNVIGI(NVIGIAppCtx& nvigiCtx)
+{
+    if (NVIGI_FAILED(result, ptr_nvigiShutdown()))
+    {
+        loggingCallback(nvigi::LogType::eError, "Error in 'nvigiShutdown'");
+        return -1;
+    }
+
+    FreeLibrary(nvigiCtx.coreLib);
 
     return 0;
 }
 
-nvigi::InferenceInstance* createEmbedInstance(nvigi::IEmbed* iembed)
+///////////////////////////////////////
+//! Embed Init and Release
+
+
+int InitEmbed(NVIGIAppCtx& nvigiCtx, const std::string& modelDir)
 {
+    //! Embed Interface
+    if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigi::plugin::embed::ggml::cuda::kId, &nvigiCtx.iembed, ptr_nvigiLoadInterface)))
+    {
+        loggingCallback(nvigi::LogType::eError, "Could not query Embed interface");
+        return -1;
+    }
+
     nvigi::EmbedCreationParameters embedParams{};
     nvigi::CommonCreationParameters embedCommon{};
     
-    embedParams.chain(embedCommon);
+    if (NVIGI_FAILED(result, embedParams.chain(embedCommon)))
+    {
+        loggingCallback(nvigi::LogType::eError, "Embed param chaining failed");
+        return -1;
+    }
     embedCommon.utf8PathToModels = modelDir.c_str();
     embedCommon.numThreads = 1;
     embedCommon.vramBudgetMB = vram;
@@ -198,9 +218,9 @@ nvigi::InferenceInstance* createEmbedInstance(nvigi::IEmbed* iembed)
 
     // Query capabilities/models list and find the model we are interested in to use that index to find what embedding size our output data should be in.
     nvigi::EmbedCapabilitiesAndRequirements* info{};
-    getCapsAndRequirements(iembed, embedParams, &info);
+    getCapsAndRequirements(nvigiCtx.iembed, embedParams, &info);
     if (info == nullptr)
-        return nullptr;
+        return -1;
 
     for (int i = 0; i < info->common->numSupportedModels; ++i)
     {
@@ -213,28 +233,43 @@ nvigi::InferenceInstance* createEmbedInstance(nvigi::IEmbed* iembed)
     }
 
     if (embedding_size == 0 || max_position_embeddings == 0)
-        return nullptr;
+        return -1;
 
-    nvigi::InferenceInstance* instance{};
-    auto result = iembed->createInstance(embedParams, &instance);
+    if (NVIGI_FAILED(result, nvigiCtx.iembed->createInstance(embedParams, &nvigiCtx.embedInst)))
+        return -1;
 
-    return instance;
+    return 0;
 }
 
-void destroyEmbedInstance(nvigi::IEmbed* iembed, nvigi::InferenceInstance** embedInstance)
+int ReleaseEmbed(NVIGIAppCtx& nvigiCtx)
 {
-    if ((embedInstance == nullptr) || (*embedInstance == nullptr))
-        return;
+    if (nvigiCtx.embedInst == nullptr)
+        return 0;
 
-    nvigi::Result result = iembed->destroyInstance(*embedInstance);
-    if (result == nvigi::kResultOk)
-        *embedInstance = nullptr;
-    else
+    if (NVIGI_FAILED(result, nvigiCtx.iembed->destroyInstance(nvigiCtx.embedInst)))
+    {
         loggingCallback(nvigi::LogType::eError, "Failed to destroy embed instance");
+        return -1;
+    }
+
+    if (!unloadInterface(nvigi::plugin::embed::ggml::cuda::kId, nvigiCtx.iembed))
+    {
+        loggingCallback(nvigi::LogType::eError, "Failed to release embed interface");
+        return -1;
+    }
+
+    return 0;
 }
 
-nvigi::InferenceInstance* createGPTInstance(nvigi::IGeneralPurposeTransformer* igpt)
+int InitGPT(NVIGIAppCtx& nvigiCtx, const std::string& modelDir)
 {
+    //! GPT Interface
+    if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigi::plugin::gpt::ggml::cuda::kId, &nvigiCtx.igpt, ptr_nvigiLoadInterface)))
+    {
+        loggingCallback(nvigi::LogType::eError, "Could not query GPT interface");
+        return -1;
+    }
+
     nvigi::GPTCreationParameters gptParams{};
     nvigi::CommonCreationParameters gptCommon{};
     gptCommon.utf8PathToModels = modelDir.c_str();
@@ -242,32 +277,43 @@ nvigi::InferenceInstance* createGPTInstance(nvigi::IGeneralPurposeTransformer* i
     gptCommon.vramBudgetMB = vram;
     gptParams.contextSize = 4096;
     gptCommon.modelGUID = "{8E31808B-C182-4016-9ED8-64804FF5B40D}"; // nemotron4-mini-instruct v0.1.3
-    gptCommon.chain(gptParams);
+    if (NVIGI_FAILED(result, gptCommon.chain(gptParams)))
+    {
+        loggingCallback(nvigi::LogType::eError, "GPT param chaining failed");
+        return -1;
+    }
 
     nvigi::CommonCapabilitiesAndRequirements* info{};
-    getCapsAndRequirements(igpt, gptCommon, &info);
+    getCapsAndRequirements(nvigiCtx.igpt, gptCommon, &info);
     if (info == nullptr)
-        return nullptr;
+        return -1;
 
-    nvigi::InferenceInstance* instance{};
-    auto result = igpt->createInstance(gptCommon, &instance);
+    auto result = nvigiCtx.igpt->createInstance(gptCommon, &nvigiCtx.gptInst);
 
-    return instance;
+    return 0;
 }
 
-void destroyGPTInstance(nvigi::IGeneralPurposeTransformer* igpt, nvigi::InferenceInstance** gptInstance)
+int ReleaseGPT(NVIGIAppCtx& nvigiCtx)
 {
-    if ((gptInstance == nullptr) || (*gptInstance == nullptr))
-        return;
+    if (nvigiCtx.gptInst == nullptr)
+        return -1;
 
-    nvigi::Result result = igpt->destroyInstance(*gptInstance);
-    if (result == nvigi::kResultOk)
-        *gptInstance = nullptr;
-    else
-        loggingCallback(nvigi::LogType::eError, "Failed to destroy gpt instance");
+    if (NVIGI_FAILED(result, nvigiCtx.igpt->destroyInstance(nvigiCtx.gptInst)))
+    {
+        loggingCallback(nvigi::LogType::eError, "Failed to destroy GPT instance");
+        return -1;
+    }
+
+    if (!unloadInterface(nvigi::plugin::gpt::ggml::cuda::kId, nvigiCtx.igpt))
+    {
+        loggingCallback(nvigi::LogType::eError, "Failed to release GPT interface");
+        return -1;
+    }
+
+    return 0;
 }
 
-void getCompletion(nvigi::InferenceInstance* instance, const std::string& prompt, std::string& answer)
+void GetCompletion(NVIGIAppCtx& nvigiCtx, const std::string& prompt, std::string& answer)
 {
     answer = "";
 
@@ -276,8 +322,8 @@ void getCompletion(nvigi::InferenceInstance* instance, const std::string& prompt
     char buffer[1024];
     nvigi::CpuData text1(1024, (void*)buffer);
     nvigi::InferenceDataText data1(text1);
-    std::vector<nvigi::InferenceDataSlot> inSlots = { {nvigi::kGPTDataSlotUser, &data} };
-    std::vector<nvigi::InferenceDataSlot> outSlots = { {nvigi::kGPTDataSlotResponse, &data1} };
+    std::vector<nvigi::InferenceDataSlot> inSlots = { {nvigi::kGPTDataSlotUser, data} };
+    std::vector<nvigi::InferenceDataSlot> outSlots = { {nvigi::kGPTDataSlotResponse, data1} };
     nvigi::InferenceDataSlotArray inputs = { inSlots.size(), inSlots.data() };
     nvigi::InferenceDataSlotArray outputs = { outSlots.size(), outSlots.data() };
 
@@ -295,7 +341,7 @@ void getCompletion(nvigi::InferenceInstance* instance, const std::string& prompt
     UserDataBlock userData;
 
     nvigi::InferenceExecutionContext ctx{};
-    ctx.instance = instance;
+    ctx.instance = nvigiCtx.gptInst;
     ctx.callbackUserData = &userData;
     ctx.callback = [](const nvigi::InferenceExecutionContext* ctx, nvigi::InferenceExecutionState state, void* userData)->nvigi::InferenceExecutionState
         {
@@ -442,46 +488,6 @@ bool loadText(const std::string& filepath, std::string& dest)
     return true;
 }
 
-void embed(nvigi::IEmbed* iembed, nvigi::InferenceInstance* instance, const std::string& input, std::vector<float>& output_embeddings)
-{
-    int n_prompts = countLines(input, nvigi::prompts_sep);
-    output_embeddings.clear();
-
-    output_embeddings.resize(n_prompts * embedding_size);
-
-    nvigi::CpuData text(input.length() + 1, (void*)input.c_str());
-    nvigi::InferenceDataText input_prompt(text);
-
-    nvigi::CpuData cpu_data;
-    cpu_data.sizeInBytes = output_embeddings.size() * sizeof(float);
-    cpu_data.buffer = output_embeddings.data();
-    nvigi::InferenceDataByteArray output_param(cpu_data);
-    std::vector<nvigi::InferenceDataSlot> inSlots = { {nvigi::kEmbedDataSlotInText, &input_prompt} };
-    std::vector<nvigi::InferenceDataSlot> outSlots = { {nvigi::kEmbedDataSlotOutEmbedding, &output_param} };
-    nvigi::InferenceDataSlotArray inputs = { inSlots.size(), inSlots.data() };
-    nvigi::InferenceDataSlotArray outputs = { outSlots.size(), outSlots.data() };
-
-    nvigi::InferenceExecutionContext ctx{};
-    ctx.instance = instance;
-    std::atomic<bool> done = false;
-    ctx.callbackUserData = &done;
-    ctx.callback = [](const nvigi::InferenceExecutionContext* ctx, nvigi::InferenceExecutionState state, void* userData)->nvigi::InferenceExecutionState 
-        { 
-            std::atomic<bool>* done = static_cast<std::atomic<bool>*>(userData);
-            done->store(state == nvigi::kInferenceExecutionStateDone);
-            return state; 
-        };
-    ctx.inputs = &inputs;
-    ctx.outputs = &outputs;
-    nvigi::Result res = ctx.instance->evaluate(&ctx);
-    if (res != nvigi::kResultOk)
-    {
-        loggingCallback(nvigi::LogType::eError, "Embed evaluate failed");
-    }
-
-    while (!done);
-}
-
 void splitString(const std::string& src, const std::string& delimiter, std::vector<std::string>& dest)
 {
     size_t start = 0, end, delimLength = delimiter.length();
@@ -506,7 +512,46 @@ size_t replaceSubstring(std::string& str, const std::string& from, const std::st
     return num_replaced;
 }
 
-void createTextEmbeddings(nvigi::IEmbed* iembed, nvigi::InferenceInstance* instance, const std::string& textfile, VectorStore& vector_store, StringVec& text_corpus)
+void GenerateEmbeddings(nvigi::IEmbed* iembed, nvigi::InferenceInstance* instance, const std::string& input, std::vector<float>& output_embeddings)
+{
+    int n_prompts = countLines(input, nvigi::prompts_sep);
+    output_embeddings.clear();
+
+    output_embeddings.resize(n_prompts * embedding_size);
+
+    nvigi::InferenceDataTextSTLHelper input_prompt(input);
+
+    nvigi::CpuData cpu_data;
+    cpu_data.sizeInBytes = output_embeddings.size() * sizeof(float);
+    cpu_data.buffer = output_embeddings.data();
+    nvigi::InferenceDataByteArray output_param(cpu_data);
+    std::vector<nvigi::InferenceDataSlot> inSlots = { {nvigi::kEmbedDataSlotInText, input_prompt} };
+    std::vector<nvigi::InferenceDataSlot> outSlots = { {nvigi::kEmbedDataSlotOutEmbedding, output_param} };
+    nvigi::InferenceDataSlotArray inputs = { inSlots.size(), inSlots.data() };
+    nvigi::InferenceDataSlotArray outputs = { outSlots.size(), outSlots.data() };
+
+    nvigi::InferenceExecutionContext ctx{};
+    ctx.instance = instance;
+    std::atomic<bool> done = false;
+    ctx.callbackUserData = &done;
+    ctx.callback = [](const nvigi::InferenceExecutionContext* ctx, nvigi::InferenceExecutionState state, void* userData)->nvigi::InferenceExecutionState 
+        { 
+            std::atomic<bool>* done = static_cast<std::atomic<bool>*>(userData);
+            done->store(state == nvigi::kInferenceExecutionStateDone);
+            return state; 
+        };
+    ctx.inputs = &inputs;
+    ctx.outputs = &outputs;
+    nvigi::Result res = ctx.instance->evaluate(&ctx);
+    if (res != nvigi::kResultOk)
+    {
+        loggingCallback(nvigi::LogType::eError, "Embed evaluate failed");
+    }
+
+    while (!done);
+}
+
+void CreateTextEmbeddings(NVIGIAppCtx& nvigiCtx, const std::string& textfile, VectorStore& vector_store, StringVec& text_corpus)
 {
     std::string text;
     if (!loadText(textfile, text))
@@ -523,7 +568,7 @@ void createTextEmbeddings(nvigi::IEmbed* iembed, nvigi::InferenceInstance* insta
     size_t num_entries = num_replaced + 1;
 
     std::vector<float> output_embeddings;
-    embed(iembed, instance, prepped_text, output_embeddings);
+    GenerateEmbeddings(nvigiCtx.iembed, nvigiCtx.embedInst, prepped_text, output_embeddings);
 
     float* full_embedding = output_embeddings.data();
 
@@ -533,12 +578,12 @@ void createTextEmbeddings(nvigi::IEmbed* iembed, nvigi::InferenceInstance* insta
     }
 }
 
-void retrieveContext(nvigi::IEmbed* iembed, nvigi::InferenceInstance* instance, const std::string& input_prompt, VectorStore& vector_store, StringVec& text_corpus, size_t top_n, std::string& out_context)
+void RetrieveContext(NVIGIAppCtx& nvigiCtx, const std::string& input_prompt, VectorStore& vector_store, StringVec& text_corpus, size_t top_n, std::string& out_context)
 {
     out_context = "";
     std::vector<float> player_prompt_embeddings;
     std::string sanitized_prompt = removeNonUTF8(input_prompt);
-    embed(iembed, instance, input_prompt, player_prompt_embeddings);
+    GenerateEmbeddings(nvigiCtx.iembed, nvigiCtx.embedInst, input_prompt, player_prompt_embeddings);
 
     IndexScoreVec scores;
     cosSimScore(player_prompt_embeddings, vector_store, scores);
@@ -553,6 +598,8 @@ void retrieveContext(nvigi::IEmbed* iembed, nvigi::InferenceInstance* instance, 
 
 int main(int argc, char** argv)
 {
+    NVIGIAppCtx nvigiCtx;
+
     if (argc != 3)
     {
         loggingCallback(nvigi::LogType::eError, "nvigi.rag <path to models> <text file>");
@@ -560,40 +607,23 @@ int main(int argc, char** argv)
     }
     modelDir = argv[1];
     std::string textFilePath = argv[2];
+    auto pathToSDKUtf8 = getExecutablePath();
 
-    if (!initIGI())
+    if (InitNVIGI(nvigiCtx, pathToSDKUtf8))
         return -1;
 
     //////////////////////////////////////////////////////////////////////////////
     //! Init Plugin Interfaces and Instances
 
-    //! Embed Interface
-    nvigi::IEmbed* iembed{};
-    if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigi::plugin::embed::ggml::cuda::kId, &iembed, ptr_nvigiLoadInterface)))
-    {
-        loggingCallback(nvigi::LogType::eError, "Could not query Embed interface");
-        return -1;
-    }
-
     //! Embed Instance
-    nvigi::InferenceInstance* embedInstance = createEmbedInstance(iembed);
-    if (embedInstance == nullptr)
+    if (InitEmbed(nvigiCtx, modelDir))
     {
-        loggingCallback(nvigi::LogType::eError, "Could not create Embed instance");
-        return -1;
-    }
-
-    //! GPT Interface
-    nvigi::IGeneralPurposeTransformer* igpt{};
-    if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigi::plugin::gpt::ggml::cuda::kId, &igpt, ptr_nvigiLoadInterface)))
-    {
-        loggingCallback(nvigi::LogType::eError, "Could not query GPT interface");
+        loggingCallback(nvigi::LogType::eError, "Could not create GPT instance");
         return -1;
     }
 
     //! GPT Instance
-    nvigi::InferenceInstance* gptInstance = createGPTInstance(igpt);
-    if (gptInstance == nullptr)
+    if (InitGPT(nvigiCtx, modelDir))
     {
         loggingCallback(nvigi::LogType::eError, "Could not create GPT instance");
         return -1;
@@ -608,7 +638,7 @@ int main(int argc, char** argv)
     VectorStore text_embedding;
     // the textual passages that map to each embedding
     StringVec text_corpus;
-    createTextEmbeddings(iembed, embedInstance, textFilePath, text_embedding, text_corpus);
+    CreateTextEmbeddings(nvigiCtx, textFilePath, text_embedding, text_corpus);
 
     std::cout << "\nAsk your questions of the document.  Type 'exit' by itself to end the program\n";
 
@@ -626,7 +656,7 @@ int main(int argc, char** argv)
         //! Get the TopN context from the text that match the user prompt
         std::string context = "";
         size_t top_n = 5;
-        retrieveContext(iembed, embedInstance, user_prompt, text_embedding, text_corpus, top_n, context);
+        RetrieveContext(nvigiCtx, user_prompt, text_embedding, text_corpus, top_n, context);
 
         //! This prompt template is built around Nemotron4-mini-instruct.  Modify it as needed for other LLMs
         //! Note white space and new lines are important to correct usage of the prompt template.  Pay attention.
@@ -640,7 +670,7 @@ int main(int argc, char** argv)
 
         //! Pass the prompt to the LLM for completion.
         std::string answer = "";
-        getCompletion(gptInstance, prompt_template, answer);
+        GetCompletion(nvigiCtx, prompt_template, answer);
 
         std::cout << "\nUser: ";
         std::getline(std::cin, user_prompt);
@@ -649,13 +679,11 @@ int main(int argc, char** argv)
     //////////////////////////////////////////////////////////////////////////////
     //! Shutdown NVIGI
 
-    destroyGPTInstance(igpt, &gptInstance);
+    if (ReleaseGPT(nvigiCtx))
+        return -1;
 
-    destroyEmbedInstance(iembed, &embedInstance);
+    if (ReleaseEmbed(nvigiCtx))
+        return -1;
 
-    unloadInterface(nvigi::plugin::gpt::ggml::cuda::kId, igpt);
-
-    unloadInterface(nvigi::plugin::embed::ggml::cuda::kId, iembed);
-
-    return shutdownIGI();
+    return ShutdownNVIGI(nvigiCtx);
 }

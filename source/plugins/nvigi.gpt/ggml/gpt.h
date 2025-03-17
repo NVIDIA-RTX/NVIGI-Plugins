@@ -26,6 +26,7 @@
 #include <regex>
 
 #ifdef GGML_USE_CUBLAS
+#include "source/core/nvigi.api/nvigi_cuda.h"
 #include "ggml-cuda.h"
 #include <cuda_runtime.h>
 #elif GGML_USE_CLBLAST
@@ -84,9 +85,32 @@ struct InferenceContextSync
     std::atomic<bool> runningChat = false;
     std::atomic<bool> newInput = false;
     std::atomic<bool> silenceOutput = false;
+    std::atomic<bool> persistentKVCache = false;
     nvigi::InferenceExecutionContext* execCtx;
+    std::vector<llama_token> cachedTokens;
 };
 
+#ifdef GGML_USE_CUBLAS
+void setCudaMallocReportCallback(PFun_nvigiCudaReportCallback callback, void* userContext)
+{
+    ggml_backend_cuda_set_malloc_report_callback(callback, userContext);
+}
+
+void setCudaFreeReportCallback(PFun_nvigiCudaReportCallback callback, void* userContext)
+{
+    ggml_backend_cuda_set_free_report_callback(callback, userContext);
+}
+
+void setCudaMallocCallback(PFun_nvigiCudaMallocCallback callback, void* userContext)
+{
+    ggml_backend_cuda_set_malloc_callback(callback, userContext);
+}
+
+void setCudaFreeCallback(PFun_nvigiCudaFreeCallback callback, void* userContext)
+{
+    ggml_backend_cuda_set_free_callback(callback, userContext);
+}
+#endif // GGML_USE_CUBLAS
 
 using internalCallback = std::function<nvigi::InferenceExecutionState(nvigi::InferenceExecutionContext* execCtx, int32_t token, const std::string& response, nvigi::InferenceExecutionState state)>;
 
@@ -112,9 +136,9 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
         sync->runningWithMutexLockedPromise.set_value();
     }
 
-    auto& sparams = params.sparams;
+    auto& sparams = params.sampling;
 
-    const int n_ctx_train = llama_n_ctx_train(model);
+    const int n_ctx_train = llama_model_n_ctx_train(model);
     const int n_ctx = llama_n_ctx(ctx);
 
     common_sampler* smpl = nullptr;
@@ -131,7 +155,7 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
     }
 
     // print chat template example in conversation mode
-    if (params.conversation) {
+    if (params.conversation_mode) {
         if (params.enable_chat_template) {
             LOG_INF("%s: chat template example:\n%s\n", __func__, common_chat_format_example(model, params.chat_template).c_str());
         } else {
@@ -145,34 +169,62 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
         LOG_INF("%s\n", common_params_get_system_info(params).c_str());
         LOG_INF("\n");
     }
-    std::string path_session = params.path_prompt_cache;
-    std::vector<llama_token> session_tokens;
-
+    std::string path_session;
     // Begin NVIDIA Modification
-    // Commenting out trans-session saving for now.
-    //if (!path_session.empty()) {
-    //    LOG_INF("%s: attempting to load saved session from '%s'\n", __func__, path_session.c_str());
-    //    if (!file_exists(path_session)) {
-    //        LOG_INF("%s: session file does not exist, will create.\n", __func__);
-    //    } else if (file_is_empty(path_session)) {
-    //        LOG_INF("%s: The session file is empty. A new session will be initialized.\n", __func__);
-    //    } else {
-    //        // The file exists and is not empty
-    //        session_tokens.resize(n_ctx);
-    //        size_t n_token_count_out = 0;
-    //        if (!llama_state_load_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.capacity(), &n_token_count_out)) {
-    //            LOG_ERR("%s: failed to load session file '%s'\n", __func__, path_session.c_str());
-    //            return 1;
-    //        }
-    //        session_tokens.resize(n_token_count_out);
-    //        LOG_INF("%s: loaded a session with prompt size of %d tokens\n", __func__, (int)session_tokens.size());
-    //    }
-    //}
+    if (!params.path_prompt_cache.empty() && !file::getOSValidDirectoryPath(params.path_prompt_cache.c_str(), path_session))
+    {
+        LOG_ERR("%s: invalid path to session cache\n", __func__);
+        return 1;
+    }
+
+    std::vector<llama_token> _session_tokens;
+    std::vector<llama_token>& session_tokens = _session_tokens;
+    if (sync->persistentKVCache)
+    {
+        session_tokens = sync->cachedTokens;
+    }
     // End NVIDIA Modification
 
-    const bool add_bos = llama_add_bos_token(model);
+    if (!path_session.empty()) {
+
+        // Begin NVIDIA Modification
+        auto file_exists = [](const std::string& path)->bool {
+            std::ifstream f(path.c_str());
+            return f.good();
+            };
+
+        auto file_is_empty = [](const std::string& path)->bool {
+            std::ifstream f;
+            f.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+            f.open(path.c_str(), std::ios::in | std::ios::binary | std::ios::ate);
+            return f.tellg() == 0;
+            };
+        // End NVIDIA Modification
+
+        LOG_INF("%s: attempting to load saved session from '%s'\n", __func__, path_session.c_str());
+        if (!file_exists(path_session)) {
+            LOG_INF("%s: session file does not exist, will create.\n", __func__);
+        } else if (file_is_empty(path_session)) {
+            LOG_INF("%s: The session file is empty. A new session will be initialized.\n", __func__);
+        } else {
+            // The file exists and is not empty
+            session_tokens.resize(n_ctx);
+            size_t n_token_count_out = 0;
+            if (!llama_state_load_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.capacity(), &n_token_count_out)) {
+                LOG_ERR("%s: failed to load session file '%s'\n", __func__, path_session.c_str());
+                return 1;
+            }
+            session_tokens.resize(n_token_count_out);
+            LOG_INF("%s: loaded a session with prompt size of %d tokens\n", __func__, (int)session_tokens.size());
+        }
+    }
+
+    const llama_vocab* vocab = llama_model_get_vocab(model);
+
+    // NVIDIA Modification, we pre-process prompt so no need for llama to do anything
+    const bool add_bos = false;// llama_vocab_get_add_bos(vocab);
     if (!llama_model_has_encoder(model)) {
-        GGML_ASSERT(!llama_add_eos_token(model));
+        GGML_ASSERT(!llama_vocab_get_add_eos(vocab));
     }
 
     LOG_DBG("n_ctx: %d, add_bos: %d\n", n_ctx, add_bos);
@@ -182,14 +234,14 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
     {
         // Begin NVIDIA Modification
         // chat_add_and_format modified to take params
-        auto prompt = (params.conversation && params.enable_chat_template && !params.prompt.empty())
+        auto prompt = (params.conversation_mode && params.enable_chat_template && !params.prompt.empty())
             ? chat_add_and_format(&params, model, chat_msgs, "system", params.prompt) // format the system prompt in conversation mode
             : params.prompt;
         // End NVIDIA Modification
 
         if (params.interactive_first || !params.prompt.empty() || session_tokens.empty()) {
             LOG_DBG("tokenize the prompt\n");
-            embd_inp = common_tokenize(ctx, prompt, true, true);
+            embd_inp = common_tokenize(ctx, prompt, add_bos, true);
         } else {
             LOG_DBG("use session tokens\n");
             embd_inp = session_tokens;
@@ -202,7 +254,7 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
     // Should not run without any tokens
     if (embd_inp.empty()) {
         if (add_bos) {
-            embd_inp.push_back(llama_token_bos(model));
+            embd_inp.push_back(llama_vocab_bos(vocab));
             LOG_WRN("embd_inp was considered empty and bos was added: %s\n", string_from(ctx, embd_inp).c_str());
         } else {
             LOG_ERR("input is empty\n");
@@ -259,7 +311,7 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
         params.n_keep += add_bos; // always keep the BOS token
     }
 
-    if (params.conversation) {
+    if (params.conversation_mode) {
         params.interactive_first = true;
     }
 
@@ -469,8 +521,8 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
         }
 
         llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
-        if (decoder_start_token_id == -1) {
-            decoder_start_token_id = llama_token_bos(model);
+        if (decoder_start_token_id == LLAMA_TOKEN_NULL) {
+            decoder_start_token_id = llama_vocab_bos(vocab);
         }
 
         embd_inp.clear();
@@ -676,10 +728,12 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
             }
 			// End NVIDIA Modification
 
-            if (!embd.empty() && !path_session.empty()) {
+            // Begin NVIDIA Modifications
+            if (!embd.empty() && (!path_session.empty() || sync->persistentKVCache)) {
                 session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
                 n_session_consumed = session_tokens.size();
             }
+            // End NVIDIA Modifications
         }
 
         embd.clear();
@@ -819,7 +873,7 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
             }
 
             // deal with end of generation tokens in interactive mode
-            if (llama_token_is_eog(model, common_sampler_last(smpl))) {
+            if (llama_vocab_is_eog(vocab, common_sampler_last(smpl))) {
                 LOG_DBG("found an EOG token\n");
 
                 if (params.interactive) {
@@ -842,7 +896,7 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
             }
 
             // if current token is not EOG, we add it to current assistant message
-            if (params.conversation) {
+            if (params.conversation_mode) {
                 const auto id = common_sampler_last(smpl);
                 assistant_ss << common_token_to_piece(ctx, id, false);
             }
@@ -850,17 +904,17 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
             if (n_past > 0 && is_interacting) {
                 LOG_DBG("waiting for user input\n");
 
-                if (params.conversation) {
+                if (params.conversation_mode) {
                     LOG("\n> ");
                 }
 
                 if (params.input_prefix_bos) {
                     LOG_DBG("adding input prefix BOS token\n");
-                    embd_inp.push_back(llama_token_bos(model));
+                    embd_inp.push_back(llama_vocab_bos(vocab));
                 }
 
                 std::string buffer;
-                if (!params.input_prefix.empty() && !params.conversation) {
+                if (!params.input_prefix.empty() && !params.conversation_mode) {
                     LOG_DBG("appending input prefix: '%s'\n", params.input_prefix.c_str());
                     LOG("%s", params.input_prefix.c_str());
                 }
@@ -920,7 +974,7 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
                 // Entering a empty line lets the user pass control back
                 if (buffer.length() > 1) {
                     // append input suffix if any
-                    if (!params.input_suffix.empty() && !params.conversation) {
+                    if (!params.input_suffix.empty() && !params.conversation_mode) {
                         LOG_DBG("appending input suffix: '%s'\n", params.input_suffix.c_str());
                         LOG("%s", params.input_suffix.c_str());
                     }
@@ -933,7 +987,7 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
                         string_process_escapes(buffer);
                     }
 
-                    bool format_chat = params.conversation && params.enable_chat_template;
+                    bool format_chat = params.conversation_mode && params.enable_chat_template;
                     // Begin NVIDIA Modifications
                     // chat_add_and_format takes an input params instead of using a global static.
                     std::string user_inp = format_chat
@@ -950,8 +1004,8 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
 
                     // if user stop generation mid-way, we must add EOT to finish model's last response
                     if (need_insert_eot && format_chat) {
-                        llama_token eot = llama_token_eot(model);
-                        embd_inp.push_back(eot == -1 ? llama_token_eos(model) : eot);
+                        llama_token eot = llama_vocab_eot(vocab);
+                        embd_inp.push_back(eot == LLAMA_TOKEN_NULL ? llama_vocab_eos(vocab) : eot);
                         need_insert_eot = false;
                     }
 
@@ -989,7 +1043,7 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
         }
 
         // end of generation
-        if (!embd.empty() && llama_token_is_eog(model, embd.back()) && !(params.interactive)) {
+        if (!embd.empty() && llama_vocab_is_eog(vocab, embd.back()) && !(params.interactive)) {
             LOG(" [end of text]\n");
             break;
         }
@@ -1004,17 +1058,17 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
 
     // Begin NVIDIA Modification
     // This clears the conversation cache.  This allows us to have different conversations.
-    llama_kv_cache_clear(ctx);
+    if (!sync->persistentKVCache)
+    {
+        llama_kv_cache_clear(ctx);
+    }
     // End NVIDIA Modification
 
-    // Begin NVIDIA Modification
-    // Commenting out trans-session saving for now.
-    //if (!path_session.empty() && params.prompt_cache_all && !params.prompt_cache_ro) {
-    //    LOG("\n%s: saving final output to session file '%s'\n", __func__, path_session.c_str());
-    //    llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
-    //}
-    // End NVIDIA Modification
-
+    if (!path_session.empty() && params.prompt_cache_all && !params.prompt_cache_ro) {
+        LOG("\n%s: saving final output to session file '%s'\n", __func__, path_session.c_str());
+        llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
+    }
+    
     // Begin NVIDIA Modification
     // Additional timing related storage for later retrieval
 #ifndef NVIGI_PRODUCTION

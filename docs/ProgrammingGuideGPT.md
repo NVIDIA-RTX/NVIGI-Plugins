@@ -9,15 +9,13 @@ Please read the `docs\ProgrammingGuideAI.md` located in the NVIGI Core package t
 
 > **NOTE** The NVIGI code currently uses the now-outdated term "General Purpose Transformer" for Generative Pre-Trained Transformers in its headers/classes/types.  This will be rectified in a coming release.
 
-## Version 1.0.0 General Access
-
 ## 1.0 INITIALIZE AND SHUTDOWN
 
 Please read the `docs/ProgrammingGuide.md` located in the NVIGI Core package to learn more about initializing and shutting down NVIGI SDK. :only:`binary_pack:[Which may be found here in combined binary packs](../../../nvigi_core/docs/ProgrammingGuide.md)` 
 
 ## 2.0 OBTAIN GPT INTERFACE(S)
 
-Next, we need to retrieve GPT's API interface based on what variant we need (cloud, CUDA etc.).  **NOTE** only the local inference plugins are provided/supported in this early release.  The cloud plugins will be added in a later release:
+Next, we need to retrieve GPT's API interface based on what variant we need (cloud, CUDA, etc.). 
 
 ```cpp
 
@@ -45,6 +43,8 @@ Now that we have our interface we can use it to create our GPT instance. To do t
 We can obtain this information by requesting capabilities and requirements for a model or models. 
 
 ### 3.1 OBTAIN CAPABILITIES AND REQUIREMENTS FOR MODEL(S)
+
+> **IMPORTANT NOTE**: This section covers a scenario where the host application can instantiate models that were not included when the application was packaged and shipped. If the models and their capabilities are predefined and there is no need for dynamically downloaded models, you can skip to the next section.
 
 There are few options here:
 
@@ -98,6 +98,8 @@ for (size_t i = 0; i < caps->numSupportedModels; i++)
 }
 ```
 
+### 3.2 CREATE MODEL INSTANCE
+
 Once we know which model we want here is an example on how to create an instance for it:
 
 ```cpp
@@ -136,15 +138,22 @@ Now we continue with setting up the rest of the creation parameters, like model 
 As mention in the previous section, we detected that `GPTSamplerParameters` is supported so we can chain it with the rest of our creation paramters:
 ```cpp
    // Using helper operator hence *sampler
-   params.chain(*sampler);
+   if(NVIGI_FAILED(params.chain(*sampler)))
+   {
+     // handle error
+   }
 ```
-Next we need to provide information about D3D properties if our application is running with a D3D context:
+Next we need to provide information about D3D12 properties if our application is planning to leverage `CiG` (CUDA In Graphics)
 ```cpp
-    //! Optional but highly recommended if using D3D context, if NOT provided performance might not be optimal
     nvigi::D3D12Parameters d3d12Params{};
-    d3d12Params.device = myDevice;
-    d3d12Params.queue = myQueue;
-    params.chain(d3d12Params);
+    d3d12Params.device = myDevice; 
+    d3d12Params.queue = myDirectQueue; // mandatory to use CIG
+    d3d12Params.queueCompute = myComputeQueue; // optional
+    d3d12Params.queueCopy = myCopyQueue; // optional
+    if(NVIGI_FAILED(params.chain(d3d12Params)))
+    {
+        // handle error
+    }
 
     if(NVIGI_FAILED(res, igptLocal.createInstance(params, &gptInstanceLocal)))
     {
@@ -152,14 +161,17 @@ Next we need to provide information about D3D properties if our application is r
     }
 }
 ```
-> **IMPORTANT**: Providing D3D or Vulkan device and queue is highly recommended to ensure optimal performance
+
 ```cpp
 nvigi::InferenceInstance* gptInstanceCloud;
 {
     nvigi::CommonCreationParameters common{};
     nvigi::GPTCreationParameters params{};    
     common.modelGUID = "{175C5C5D-E978-41AF-8F11-880D0517C524}"; // Model GUID, for details please see NVIGI models repository
-    params.chain(common);
+    if(NVIGI_FAILED(params.chain(common)))
+    {
+        // handle error
+    }
 
     //! Cloud parameters
     nvigi::RESTParameters nvcfParams{};
@@ -167,7 +179,10 @@ nvigi::InferenceInstance* gptInstanceCloud;
     getEnvVar("MY_TOKEN", token);
     nvcfParams.url = myURL;
     nvcfParams.authenticationToken = token.c_str();
-    params.chain(nvcfParams);
+    if(NVIGI_FAILED(params.chain(nvcfParams)))
+    {
+        // handle error
+    }
     
     if(NVIGI_FAILED(res, igptCloud.createInstance(params, &gptInstanceCloud, inputs, countof(inputs))))
     {
@@ -231,26 +246,7 @@ Before GPT can be evaluated the `nvigi::InferenceExecutionContext` needs to be d
 * Instruct a model and receive an answer.
 * Interact with a model while taking turns in a guided conversation.
 
-We will be using the following helper class to convert text to `nvigi::InferenceDataText`:
-
-```cpp
-struct InferenceDataTextHelper
-{
-    InferenceDataTextHelper() {};
-    InferenceDataTextHelper(const char* txt) : _text(txt){}
-    InferenceDataTextHelper(const std::string& txt) : _text(txt){}
-    operator InferenceDataText* ()
-    {
-        _data.buffer = _text.data();
-        _data.sizeInBytes = _text.length();
-        _slot.utf8Text = _data;
-        return &_slot;
-    };
-    InferenceDataText _slot{};
-    std::string _text{};
-    CpuData _data{};
-};
-```
+We will be using the `InferenceDataTextSTLHelper` helper class to convert text to `nvigi::InferenceDataText`:
 
 ### 5.1 INSTRUCT MODE
 
@@ -261,8 +257,8 @@ In this mode GPT receives **any combination** of `system`, `user` and `assistant
 std::string system("You are a world renown and extremely talented writer.");
 std::string user("Write a poem about transformers, robots in disguise");
 // Using our helper from the section above
-InferenceDataTextHelper systemSlot(system);
-InferenceDataTextHelper userSlot(user);
+InferenceDataTextSTLHelper systemSlot(system);
+InferenceDataTextSTLHelper userSlot(user);
 std::vector<nvigi::InferenceDataSlot> slots = { {nvigi::kGPTDataSlotSystem, systemSlot}, {nvigi::kGPTDataSlotUser, userSlot} };
 nvigi::InferenceDataSlotArray inputs = { slots.size(), slots.data() }; // Input slots
 
@@ -283,8 +279,8 @@ In this mode, the first call to evaluate instance that includes `system` is used
 std::string system("This is a transcript of a conversation between Rob and Bob. Rob enters the room.");
 std::string user("Hey Bob, how are you?");
 // Using our helper from the section above
-InferenceDataTextHelper systemSlot(system);
-InferenceDataTextHelper userSlot(user);
+InferenceDataTextSTLHelper systemSlot(system);
+InferenceDataTextSTLHelper userSlot(user);
 std::vector<nvigi::InferenceDataSlot> slots = { {nvigi::kGPTDataSlotSystem, systemSlot}, {nvigi::kGPTDataSlotUser, userSlot} };
 nvigi::InferenceDataSlotArray inputs = { slots.size(), slots.data() }; // Input slots
 
@@ -339,7 +335,7 @@ json restJSONBody = R"({
 
 // Creating extra input slot to provide JSON body
 std::string restJSONBodyAsString = restJSONBody.dump(2, ' ', false, json::error_handler_t::replace);
-InferenceDataTextHelper jsonSlot(restJSONBodyAsString);
+InferenceDataTextSTLHelper jsonSlot(restJSONBodyAsString);
 // Only providing one input slot, JSON
 std::vector<nvigi::InferenceDataSlot> slots = { {nvigi::kGPTDataSlotJSON, jsonSlot} };
 nvigi::InferenceDataSlotArray inputs = { slots.size(), slots.data() }; // Input slots
@@ -374,7 +370,10 @@ if(useGPT)
     //! OPTIONAL Runtime sampler properties, not necessarily supported by all backends
     nvigi::GPTSamplerParameters gptSampler{};
     gptSampler.penaltyRepeat = 0.1f;
-    gptRuntime.chain(gptSampler);
+    if(NVIGI_FAILED(gptRuntime.chain(gptSampler)))
+    {
+        // handle error
+    }
 
     //! OPTIONAL - Switching backends at runtime (could depend on current latency, available resources etc.)
     if(useLocalInference)
@@ -418,7 +417,10 @@ if(useGPT)
     //! OPTIONAL Runtime sampler properties, not necessarily supported by all backends
     nvigi::GPTSamplerParameters gptSampler{};
     gptSampler.penaltyRepeat = 0.1f;
-    gptRuntime.chain(gptSampler);
+    if(NVIGI_FAILED(gptRuntime.chain(gptSampler)))
+    {
+        // handle error
+    }
 
     //! OPTIONAL - Switching backends at runtime (could depend on current latency, available resources etc.)
     if(useLocalInference)
@@ -446,7 +448,7 @@ if(useGPT)
         {
             // Setting up new context and new input/output slots
             std::string input = getUserInputBasedOnResponseReceivedFromGPT();
-            nvigi::InferenceDataText userSlot(input);        
+            nvigi::InferenceDataTextSTLHelper userSlot(input);        
             // Note that here we are providing `user input` slot and no system
             std::vector<nvigi::InferenceDataSlot> inSlots = { {nvigi::kGPTDataSlotUser, userSlot} };        
             InferenceDataSlotArray inputs = { inSlots.size(), inSlots.data() };
@@ -502,7 +504,107 @@ if(NVIGI_FAILED(result, nvigiUnloadInterface(nvigi::plugin::gpt::ggml::cuda::kId
 } 
 ```
 
+## 9.0 VLM (Visual Lanuage Models)
+
+The GPT plugin can also load some VILA based VLM models.  These models allows the prompts to discuss input images.
+The setup and usage is the same as a standard LLM model.  For the input InferenceDataSlot, you may now also pass in an InferenceDataImage, 
+currently limited to one image per prompt.  The input image should be a byte array in RGB format, 8 bits per channel.
+
+```cpp
+std::string prompt( "Describe this picture" );
+std::string my_image("picture.jpg");
+int w, h, c;
+auto* rgb_data = stbi_load(my_image.c_str(), &w, &h, &c, 3);
+...
+// prompt 
+nvigi::CpuData text(prompt.length() + 1, (void*)prompt.c_str());
+nvigi::InferenceDataText prompt_data(text);
+
+// image
+nvigi::CpuData image(h * w * c, rgb_data);
+nvigi::InferenceDataImage image_data(image, h, w, c);
+
+std::vector<nvigi::InferenceDataSlot> inSlots = { {nvigi::kGPTDataSlotUser, &prompt_data}, {nvigi::kGPTDataSlotImage, &image_data} };
+InferenceDataSlotArray inputs = { inSlots.size(), inSlots.data() }; // Input slots
+...
+
+if(NVIGI_FAILED(res, gptContext.instance->evaluate(gptContext)))
+{
+    LOG("NVIGI call failed, code %d", res);
+}   
+
+...
+// handle output response text from VLM same as a standard LLM
+...
+stbi_image_free(rgb_data);
+```
+
+If no image is passed in, the VLM will still function as a typical LLM.
+
+
 ## APPENDIX
+
+### MEMORY TRACKING 
+
+#### CUDA
+
+NVIGI provides callback mechanism to track/allocated/free GPU resources as defined in the `nvigi_cuda.h` header. Here is an example:
+
+```cpp
+// Callback implementations
+void MallocReportCallback(void* ptr, size_t size, void* user_context) {
+    auto* context = static_cast<int*>(user_context);
+    std::cout << "Malloc Report: Allocated " << size << " bytes at " << ptr 
+              << " (User context value: " << *context << ")\n";
+}
+
+void FreeReportCallback(void* ptr, size_t size, void* user_context) {
+    auto* context = static_cast<int*>(user_context);
+    std::cout << "Free Report: Freed memory at " << ptr 
+              << " (User context value: " << *context << ")\n";
+}
+
+int32_t MallocCallback(void** ptr, size_t size, int device, bool managed, bool hip, void* user_context) {
+    auto* context = static_cast<int*>(user_context);
+    *ptr = malloc(size); // Simulate CUDA malloc
+    if (*ptr) {
+        std::cout << "Malloc Callback: Allocated " << size << " bytes on device " << device 
+                  << " (Managed: " << managed << ", HIP: " << hip << ", Context: " << *context << ")\n";
+        return 0; // Success
+    }
+    return -1; // Failure
+}
+
+int32_t FreeCallback(void* ptr, void* user_context) {
+    auto* context = static_cast<int*>(user_context);
+    if (ptr) {
+        free(ptr); // Simulate CUDA free
+        std::cout << "Free Callback: Freed memory at " << ptr 
+                  << " (User context value: " << *context << ")\n";
+        return 0; // Success
+    }
+    return -1; // Failure
+}
+
+// Example usage
+CudaParameters params{};
+
+// User context for tracking (e.g., an integer counter)
+int userContextValue = 42;
+
+// Set up callbacks
+params.cudaMallocReportCallback = MallocReportCallback;
+params.cudaMallocReportUserContext = &userContextValue;
+
+params.cudaFreeReportCallback = FreeReportCallback;
+params.cudaFreeReportUserContext = &userContextValue;
+
+params.cudaMallocCallback = MallocCallback;
+params.cudaMallocUserContext = &userContextValue;
+
+params.cudaFreeCallback = FreeCallback;
+params.cudaFreeUserContext = &userContextValue;
+```
 
 ### CHAT MODE SETUP SUMMARY
 

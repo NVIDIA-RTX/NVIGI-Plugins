@@ -23,6 +23,7 @@ namespace cloud::rest
 constexpr PluginID kId = { {0x3553c9f3, 0x686c, 0x4f08,{0x83, 0x8e, 0xf2, 0xe3, 0xb4, 0x01, 0x9a, 0x72}}, 0xa589b7 }; //{3553C9F3-686C-4F08-838E-F2E3B4019A72} [nvigi.plugin.gpt.cloud.rest]
 }
 
+
 }
 }
 
@@ -77,7 +78,7 @@ NVIGI_VALIDATE_STRUCT(GPTRuntimeParameters)
 struct alignas(8) GPTSamplerParameters
 {
     GPTSamplerParameters() { };
-    NVIGI_UID(UID({ 0xfd183aa9, 0x6e50, 0x4021,{0x9b, 0x0e, 0xa7, 0xae, 0xab, 0x6e, 0xef, 0x49} }), kStructVersion1)
+    NVIGI_UID(UID({ 0xfd183aa9, 0x6e50, 0x4021,{0x9b, 0x0e, 0xa7, 0xae, 0xab, 0x6e, 0xef, 0x49} }), kStructVersion2)
 
     int32_t numPrev = 64;               // number of previous tokens to remember
     int32_t numProbs = 0;               // if greater than 0, output the probabilities of top n_probs tokens.
@@ -99,8 +100,12 @@ struct alignas(8) GPTSamplerParameters
     float   mirostatETA = 0.10f;        // learning rate
     bool    penalizeNewLine = false;    // consider newlines as a repeatable token
     bool    ignoreEOS = false;
+    // v2
+    bool persistentKVCache = false;         // if true, the KV cache will NOT be cleared between calls in instruct mode or when new system prompt is provided in chat (interactive) mode
+    const char* grammar{};                  // optional BNF-like grammar to constrain sampling
+    const char* utf8PathToSessionCache{};   // optional path to a session file to load/save the session state
 
-    //! v2+ members go here, remember to update the kStructVersionN in the above NVIGI_UID macro!
+    //! v3+ members go here, remember to update the kStructVersionN in the above NVIGI_UID macro!
 };
 
 NVIGI_VALIDATE_STRUCT(GPTSamplerParameters)

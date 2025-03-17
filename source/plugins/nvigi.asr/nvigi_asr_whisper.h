@@ -17,6 +17,7 @@ constexpr PluginID kId = {{0x2654567f, 0x2cf4, 0x4e4e,{0x95, 0x45, 0x5d, 0xa8, 0
 }
 
 
+
 //! Data slot keys
 constexpr const char* kASRWhisperDataSlotAudio = "audio";
 constexpr const char* kASRWhisperDataSlotTranscribedText = "text";

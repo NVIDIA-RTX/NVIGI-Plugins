@@ -47,10 +47,7 @@ struct InferenceContext
     common_params params{};
     json modelInfo;
 
-#ifndef NVIGI_EMBED_GFN_NVCF
-    llama_model* llamaModel{};
-    llama_context* llamaContext{};
-#endif
+    common_init_result llama_init;
 
 #if GGML_USE_CUBLAS
     // Use PushPoppableCudaContext defined in push_poppable_cuda_context.h
@@ -164,16 +161,9 @@ nvigi::Result ggmlDestroyInstance(const nvigi::InferenceInstance* instance)
 
         {
             nvigi::RuntimeContextScope scope(*embedInstance);
-            if (embedInstance->llamaModel != nullptr) {
-                llama_free_model(embedInstance->llamaModel);
-                embedInstance->llamaModel = nullptr;
-            }
-
-            if (embedInstance->llamaContext != nullptr)
-            {
-                llama_free(embedInstance->llamaContext);
-                embedInstance->llamaContext = nullptr;
-            }
+            embedInstance->llama_init.model.reset();
+            embedInstance->llama_init.context.reset();
+            embedInstance->llama_init.lora.clear();
         }
 
         delete embedInstance;
@@ -309,16 +299,15 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
             instanceData->params.n_batch = instanceData->modelInfo.contains("max_position_embeddings") ? (int)instanceData->modelInfo["max_position_embeddings"] : nvigi::default_max_position_embeddings;
             // For non-causal models, batch size must be equal to ubatch size
             instanceData->params.n_ubatch = instanceData->params.n_batch;
+            instanceData->params.n_ctx = instanceData->params.n_batch; // context size must be smaller or equal to batch size with the new llama.cpp update
             instanceData->params.warmup = false;
-            common_init_result llama_init = common_init_from_params(instanceData->params);
-            instanceData->llamaModel = llama_init.model;
-            instanceData->llamaContext = llama_init.context;
-            if (!instanceData->llamaModel)
+            instanceData->llama_init = common_init_from_params(instanceData->params);            
+            if (!instanceData->llama_init.model)
             {
                 delete instanceData;
                 return kResultInvalidState;
             }
-            else if (get_embed_size(instanceData->llamaModel) <= 0) {
+            else if (get_embed_size(instanceData->llama_init.model.get()) <= 0) {
                 NVIGI_LOG_ERROR("Embedding size should be at least 1");
                 return kResultInvalidState;
             }
@@ -502,7 +491,7 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx)
 #ifndef NVIGI_EMBED_GFN_NVCF
     // Local inference
     std::vector<float> embedding;
-    nvigi::Result res = nvigi::embed::embed(instance->llamaContext, instance->llamaModel, instance->params, embedding);
+    nvigi::Result res = nvigi::embed::embed(instance->llama_init.context.get(), instance->llama_init.model.get(), instance->params, embedding);
     if (res != kResultOk)
         return res;
 
@@ -611,7 +600,6 @@ Result nvigiPluginDeregister()
 
     llama_backend_free();
 
-#ifndef GGML_USE_CUBLAS
     // cpu 
     // Reference:  https://ofekshilon.com/2017/11/03/on-omp_wait_policy/
     // LlamaCPP uses OpenMP in CPU mode.  On shutdown, OpenMP threads can spin wait for 200ms-2000ms (varying reports)
@@ -630,7 +618,6 @@ Result nvigiPluginDeregister()
 
     // So this seems to be the least of evils - wait for the OpenMP threads to spinwait stop and then proceed with shutdown.
     std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-#endif 
 
     return kResultOk;
 }
