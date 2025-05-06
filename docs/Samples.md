@@ -24,6 +24,7 @@ The basic sample requires the following models:
 | ------ | ---------- | ---- |
 | nvigi.plugin.asr.ggml.* | Whisper Small | 5CAD3A03-1272-4D43-9F3D-655417526170 |
 | nvigi.plugin.gpt.ggml.* | Llama3.2 3b Instruct | 01F43B70-CE23-42CA-9606-74E80C5ED0B6 |
+| nvigi.plugin.tts.asqflow.* | Asqflow | 81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F |
 
 See the top-level documentation that shipped with your development pack for information on how to download these models.
 
@@ -41,7 +42,7 @@ See the top-level documentation that shipped with your development pack for info
 When run, the sample should launch a console (or use the one from which it was run); it will await user input.  The user may do one of three things at the prompt:
 - Type a chat query as text and press enter.  This will be passed directly to the LLM and the LLM response printed.
 - Type an exit command; "Q", "q" or "quit".  This will cause the sample to exit.
-- Press enter with no text.  This will start recording from the default Windows/DirectX recording device (e.g. a headset microphone).  Pressing enter again will stop recording.  Once the recording is complete, the audio will be sent to the ASR plugin and then the result of ASR printed to the console and passed to the LLM for response.
+- Press enter with no text.  This will start recording from the default Windows/DirectX recording device (e.g. a headset microphone).  Pressing enter again will stop recording.  Once the recording is complete, the audio will be sent to the ASR plugin and then the result of ASR printed to the console and passed to the LLM for response. Finally, the LLM's response is passed to the TTS model for synthesis.
 
 ### Run at Command Line
 
@@ -50,11 +51,11 @@ To run `nvigi.basic` from the command line, take the following steps (`--models`
 1. Open a command prompt in `<SDK_PLUGINS>`
 2. Run the command:
 ```sh
-bin\x64\nvigi.basic.exe --models <SDK_MODELS>
+bin\x64\nvigi.basic.exe --models <SDK_MODELS> --targetPathSpectrogram <SDK_TEST>/nvigi.tts/asqflow/mel_spectrograms_targets/Claire_neutral_8s_se.bin
 ```
 3. In a standard layout binary development pack or GitHub source tree, launching from a current working directory of the `<SDK_PLUGINS>` directory, this is:
 ```sh
-bin\x64\nvigi.basic.exe --models data/nvigi.models
+bin\x64\nvigi.basic.exe --models data/nvigi.models --targetPathSpectrogram data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/Claire_neutral_8s_se.bin
 ```
 
 Here are the command line options:
@@ -65,10 +66,13 @@ Usage: nvigi.basic [options]
   -m, --models              model repo location (REQUIRED)
   --asr-guid                asr model guid in registry format (default: {5CAD3A03-1272-4D43-9F3D-655417526170})
   -a, --audio               audio file location (default: )
+  --extendedPhonemeDict     path to the extendend phonemes dictionary for ASqFlow TTS model
   --gpt                     gpt mode, 'local' or 'cloud' - model GUID determines the cloud endpoint (default: local)
   --gpt-guid                gpt model guid in registry format (default: {01F43B70-CE23-42CA-9606-74E80C5ED0B6})
   -s, --sdk                 sdk location, (default: exe location)
   -t, --token               authorization token for the cloud provider (default: )
+  --targetPathSpectrogram   target path of the spectrogram of the voice you want to clone
+  --tts-guid                gpt model guid in registry format (default: {81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F})
   --vram                    the amount of vram to use in MB (default: 8192)
 ```
 

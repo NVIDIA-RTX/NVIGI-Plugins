@@ -12,6 +12,12 @@ copy external\openssl\bin\libcrypto-3-x64.dll bin\x64\
 copy external\zlib\bin\zlib1.dll bin\x64\
 copy external\openssl\bin\libssl-3-x64.dll bin\x64\
 copy external\openssl\bin\libcrypto-3-x64.dll bin\x64\
+copy external\microsoft.ml.onnxruntime.directml.1.20.1\runtimes\win-x64\native\onnxruntime.dll bin\x64\
+copy external\tensorrt\lib\nvinfer_10.dll bin\x64\
+copy external\cuda\bin\cudart64_12.dll bin\x64\
+copy external\SimpleFarForTTS\x64\Release\RivaNormalizer.dll bin\x64\
+copy external\cuda\extras\CUPTI\lib64\cupti64_2025.1.0.dll bin\x64\
+copy external\cig_scheduler_settings\bin\Release_x64\cig_scheduler_settings.dll bin\x64\
 copy external\cuda\bin\cublas64_12.dll bin\x64\
 copy external\cuda\bin\cublasLt64_12.dll bin\x64\
 copy external\cuda\bin\cudart64_12.dll bin\x64\
@@ -24,3 +30,9 @@ copy external\openssl\bin\libcrypto-3-x64.dll bin\x64\
 copy external\zlib\bin\zlib1.dll bin\x64\
 copy external\openssl\bin\libssl-3-x64.dll bin\x64\
 copy external\openssl\bin\libcrypto-3-x64.dll bin\x64\
+copy external\microsoft.ml.onnxruntime.directml.1.20.1\runtimes\win-x64\native\onnxruntime.dll bin\x64\
+copy external\tensorrt\lib\nvinfer_10.dll bin\x64\
+copy external\cuda\bin\cudart64_12.dll bin\x64\
+copy external\SimpleFarForTTS\x64\Release\RivaNormalizer.dll bin\x64\
+copy external\cuda\extras\CUPTI\lib64\cupti64_2025.1.0.dll bin\x64\
+copy external\cig_scheduler_settings\bin\Release_x64\cig_scheduler_settings.dll bin\x64\

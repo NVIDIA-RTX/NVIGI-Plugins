@@ -22,7 +22,8 @@ project "nvigi.basic"
 	-- allows the sample to compile using include directives that match a packaged SDK
 	includedirs {
 		ROOT .. "source/plugins/nvigi.asr",
-		ROOT .. "source/plugins/nvigi.gpt"
+		ROOT .. "source/plugins/nvigi.gpt",
+		ROOT .. "source/plugins/nvigi.tts"
 	}
 	filter {"system:windows"}
 		vpaths { ["impl"] = {"./**.h","./**.cpp", }}

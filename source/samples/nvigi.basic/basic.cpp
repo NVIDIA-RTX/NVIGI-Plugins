@@ -35,8 +35,8 @@ namespace fs = std::filesystem;
 #include <nvigi.h>
 #include "nvigi_asr_whisper.h"
 #include "nvigi_gpt.h"
+#include "nvigi_tts.h"
 #include "nvigi_cloud.h"
-#include "nvigi_stl_helpers.h"
 #include <source/utils/nvigi.dsound/recorder.h>
 #include <nvigi_stl_helpers.h>
 
@@ -233,7 +233,7 @@ void writeWav(std::vector<int16_t> dataBuffer, std::string outputPath, int sampl
     header.bitsPerSample = bitsPerSample;  // Assuming 16-bit samples
     header.byteRate = header.sampleRate * header.numChannels * (header.bitsPerSample / 8);
     header.blockAlign = header.numChannels * (header.bitsPerSample / 8);
-    header.dataSize = dataBuffer.size() * sizeof(int16_t);
+    header.dataSize = static_cast<uint32_t>(dataBuffer.size() * sizeof(int16_t));
     header.chunkSize = 36 + header.dataSize;
 
     std::ofstream outFile(outputPath, std::ios::binary);
@@ -324,6 +324,8 @@ struct NVIGIAppCtx
     nvigi::IGeneralPurposeTransformer* igpt{};
     nvigi::PluginID gptId{};
     nvigi::InferenceInstance* gpt{};
+    nvigi::ITextToSpeech* itts{};
+    nvigi::InferenceInstance* tts{};
 };
 
 static NVIGIAppCtx nvigiCtx;
@@ -565,20 +567,98 @@ int ReleaseGPT()
 }
 
 ///////////////////////////////////////
+//! TTS Init and Release
+
+#ifdef NVIGI_WINDOWS
+int InitTTS(const std::string& modelDir, 
+    const std::string& extendedPhonemeDict, const std::string& guidTTS, size_t vramBudgetMB)
+{
+    //! TTS Interface and Instance
+    if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigi::plugin::tts::asqflow::trt::kId, &nvigiCtx.itts, ptr_nvigiLoadInterface)))
+    {
+        loggingCallback(nvigi::LogType::eError, "Could not query TTS interface");
+        return -1;
+    }
+
+    nvigi::TTSCreationParameters ttsParams{};
+    nvigi::TTSASqFlowCreationParameters asqfParams{};
+    nvigi::CommonCreationParameters ttsCommon{};
+
+   
+    {
+        asqfParams.extendedPhonemesDictPath = extendedPhonemeDict.c_str();
+
+        ttsCommon.utf8PathToModels = modelDir.c_str();
+        ttsCommon.numThreads = n_threads;
+        ttsCommon.vramBudgetMB = vramBudgetMB;
+
+        //! Model is the same regardless of the backend
+        ttsCommon.modelGUID = guidTTS.c_str();
+        if (NVIGI_FAILED(result, ttsCommon.chain(ttsParams)))
+        {
+            loggingCallback(nvigi::LogType::eError, "TTS param chaining failed");
+            return -1;
+        }
+        if (NVIGI_FAILED(result, ttsCommon.chain(asqfParams)))
+        {
+            loggingCallback(nvigi::LogType::eError, "TTS ASquaredFlow param chaining failed");
+            return -1;
+        }
+    }
+
+    if (NVIGI_FAILED(result, nvigiCtx.itts->createInstance(ttsCommon, &nvigiCtx.tts)))
+    {
+        loggingCallback(nvigi::LogType::eError, "Could not create TTS instance");
+        return -1;
+    }
+
+    return 0;
+}
+
+int ReleaseTTS()
+{
+    nvigiCtx.itts->destroyInstance(nvigiCtx.tts);
+    // Can be cloud or local
+    if (NVIGI_FAILED(result, ptr_nvigiUnloadInterface(nvigi::plugin::tts::asqflow::trt::kId, nvigiCtx.itts)))
+    {
+        loggingCallback(nvigi::LogType::eError, "Error in 'nvigiUnloadInterface'");
+        return -1;
+    }
+
+    return 0;
+}
+#endif
+
+///////////////////////////////////////
 //! Full pipeline inference context
 
 struct BasicCallbackCtx
 {
     std::mutex callbackMutex;
+    std::mutex ttsCallbackMutex;
     std::condition_variable asrCallbackCV;
     std::condition_variable gptCallbackCV;
+    std::condition_variable ttsCallbackCV;
     std::atomic<nvigi::InferenceExecutionState> asrCallbackState = nvigi::kInferenceExecutionStateDataPending;
     std::atomic<nvigi::InferenceExecutionState> gptCallbackState = nvigi::kInferenceExecutionStateDataPending;
+    std::atomic<nvigi::InferenceExecutionState> ttsCallbackState = nvigi::kInferenceExecutionStateDataPending;
     std::string asrOutput;
     std::string gptOutput;
 
+    std::string ttsInput;
+    nvigi::InferenceExecutionContext ttsExecCtx{};
+    nvigi::InferenceDataTextSTLHelper dataTextTTS;
+    size_t posLastSpace = 0; // used to handle TTS input chunks
+    size_t posLastPeriod = 0; // used to handle TTS input chunks
+    std::vector<std::int16_t> ttsOutput;
+    std::queue< std::unique_ptr<std::thread>> playAudioThreads;
+    std::mutex mtxPlayAudio;
+    std::mutex mtxttsInput;
+    std::chrono::high_resolution_clock::time_point startTimeToFirstAudio;
+
     nvigi::InferenceInstance* gptInstance{};
     nvigi::InferenceInstance* asrInstance{};
+    nvigi::InferenceInstance* ttsInstance{};
     bool conversationInitialized = false;
 };
 
@@ -645,6 +725,83 @@ int ASRInference(BasicCallbackCtx& cbkCtx, nvigi::InferenceDataAudioSTLHelper& a
 }
 
 ///////////////////////////////////////
+//! TTS inference
+
+nvigi::InferenceExecutionState TTSInferenceDataCallback(const nvigi::InferenceExecutionContext* ctx, nvigi::InferenceExecutionState state, void* userData)
+{
+    auto cbkCtx = (BasicCallbackCtx*)userData;
+    std::scoped_lock lck(cbkCtx->ttsCallbackMutex);
+
+#ifdef NVIGI_WINDOWS
+    if (state == nvigi::kInferenceExecutionStateDone || state == nvigi::kInferenceExecutionStateDataPending) {
+        auto slots = ctx->outputs;
+        std::vector<int16_t> temp;
+        const nvigi::InferenceDataByteArray* outputAudioData{};
+        slots->findAndValidateSlot(nvigi::kTTSDataSlotOutputAudio, &outputAudioData);
+
+
+        if (cbkCtx->conversationInitialized) {
+            nvigi::CpuData* cpuBuffer = castTo<nvigi::CpuData>(outputAudioData->bytes);
+
+            for (int i = 0; i < cpuBuffer->sizeInBytes / 2; i++) {
+                int16_t value = reinterpret_cast<const int16_t*>(cpuBuffer->buffer)[i];
+                cbkCtx->ttsOutput.push_back(value);
+                temp.push_back(value);
+            }
+            auto endTimeToFirstAudio = std::chrono::high_resolution_clock::now();
+
+            // Fisrt audio
+            if (temp.size() == cbkCtx->ttsOutput.size()) {
+                auto timeToFirstAudio = std::chrono::duration_cast<std::chrono::milliseconds>(endTimeToFirstAudio - cbkCtx->startTimeToFirstAudio).count();
+                loggingCallback(nvigi::LogType::eInfo, ("\nTime to first audio: " + std::to_string(timeToFirstAudio) + "ms\n").c_str());
+            }
+
+            cbkCtx->playAudioThreads.push(std::make_unique<std::thread>(std::thread(savePlayAudioData<int16_t>, temp, "", 22050, std::ref(cbkCtx->mtxPlayAudio), true, false)));
+        }
+    }
+    cbkCtx->ttsCallbackState.store(state);
+    cbkCtx->ttsCallbackCV.notify_one();
+#endif
+
+    return state;
+}
+
+int TTSInference(BasicCallbackCtx& cbkCtx, std::string& inputChunk, const bool waitAudioToFinish = false)
+{
+#ifdef NVIGI_WINDOWS
+    //! TTS
+    // Define Runtime parameters
+
+    if (!inputChunk.empty())
+    {
+        cbkCtx.dataTextTTS = nvigi::InferenceDataTextSTLHelper(inputChunk);
+
+        loggingCallback(nvigi::LogType::eInfo, "** Start TTS results\n");
+        cbkCtx.ttsCallbackState = nvigi::kInferenceExecutionStateDataPending;
+
+        nvigiCtx.tts->evaluate(&(cbkCtx.ttsExecCtx));
+    }
+    
+    // Wait for the TTS to stop returning eDataPending in the callback
+    {
+        std::unique_lock lck(cbkCtx.ttsCallbackMutex);
+        cbkCtx.ttsCallbackCV.wait(lck, [&cbkCtx]() { return cbkCtx.ttsCallbackState != nvigi::kInferenceExecutionStateDataPending; });
+        if (cbkCtx.ttsCallbackState != nvigi::kInferenceExecutionStateDone)
+        {
+            loggingCallback(nvigi::LogType::eError, "TTS Inference error!\n");
+            return -1;
+        }
+    }
+
+
+    loggingCallback(nvigi::LogType::eInfo, "** End TTS results\n");
+#endif
+
+    return 0;
+}
+
+
+///////////////////////////////////////
 //! GPT inference
 
 nvigi::InferenceExecutionState GPTInferenceDataCallback(const nvigi::InferenceExecutionContext* ctx, nvigi::InferenceExecutionState state, void* userData)
@@ -660,8 +817,52 @@ nvigi::InferenceExecutionState GPTInferenceDataCallback(const nvigi::InferenceEx
     if (cbkCtx->conversationInitialized)
     {
         cbkCtx->gptOutput += response;
+        cbkCtx->mtxttsInput.lock();
+        cbkCtx->ttsInput += response;
+        cbkCtx->mtxttsInput.unlock();
         loggingCallback(nvigi::LogType::eInfo, response.c_str());
 
+        if (cbkCtx->ttsInput != "") {
+
+            // We try to process chunks between 128 and 256 chracters maximum and avoid cutting sentences
+            bool isLastCharacterPeriod = (cbkCtx->ttsInput.back() == '\n' || cbkCtx->ttsInput.back() == '.' ||
+                cbkCtx->ttsInput.back() == '!' || cbkCtx->ttsInput.back() == '?');
+
+            if (isLastCharacterPeriod) {
+                cbkCtx->posLastPeriod = cbkCtx->ttsInput.size() - 1;
+            }
+            else if (cbkCtx->ttsInput.back() == ' ') {
+                cbkCtx->posLastSpace = cbkCtx->ttsInput.size() - 1;
+            }
+
+            if ((isLastCharacterPeriod && (cbkCtx->ttsInput.size() >= 128)) ||
+                (cbkCtx->ttsInput.size() > 256) ||
+                state == nvigi::kInferenceExecutionStateDone) {
+
+                std::string chunkToProcess;
+                cbkCtx->mtxttsInput.lock();
+                if (state == nvigi::kInferenceExecutionStateDone || isLastCharacterPeriod || (cbkCtx->posLastPeriod == 0 && cbkCtx->posLastSpace == 0)) {
+                    chunkToProcess = cbkCtx->ttsInput;
+                    cbkCtx->ttsInput = "";
+                }
+                else if (cbkCtx->posLastPeriod != 0) {
+                    chunkToProcess = cbkCtx->ttsInput.substr(0, cbkCtx->posLastPeriod + 1);
+                    cbkCtx->ttsInput = cbkCtx->ttsInput.substr(cbkCtx->posLastPeriod + 1);
+                }
+                else if (cbkCtx->posLastSpace != 0) {
+                    chunkToProcess = cbkCtx->ttsInput.substr(0, cbkCtx->posLastSpace + 1);
+                    cbkCtx->ttsInput = cbkCtx->ttsInput.substr(cbkCtx->posLastSpace + 1);
+                }
+                cbkCtx->mtxttsInput.unlock();
+
+                cbkCtx->posLastPeriod = 0;
+                cbkCtx->posLastSpace = 0;
+                cbkCtx->ttsCallbackState.store(nvigi::kInferenceExecutionStateDataPending);
+
+                // Synchronous TTS inference. We wait for TTS to finish before resuming GPT
+                TTSInference(*cbkCtx, chunkToProcess, false);
+            }
+        }
     }
 
     cbkCtx->gptCallbackState.store(state);
@@ -719,13 +920,32 @@ int GPTInference(BasicCallbackCtx& cbkCtx, std::string& gptInputText)
 ///////////////////////////////////////
 //! Full-sequence inference
 
-int RunInference(bool& hasAudio, nvigi::InferenceDataAudioSTLHelper& audioData, std::string& gptInputText, bool conversationInitialized)
+int RunInference(bool& hasAudio, nvigi::InferenceDataAudioSTLHelper& audioData, const std::string targetPathSpectrogram, std::string& gptInputText, bool conversationInitialized)
 {
     BasicCallbackCtx cbkCtx{};
     cbkCtx.conversationInitialized = conversationInitialized;
     cbkCtx.gptInstance = nvigiCtx.gpt;
     cbkCtx.asrInstance = nvigiCtx.asr;
+    cbkCtx.ttsInstance = nvigiCtx.tts;
 
+    // TTS instance is created, We can set up the inference context since we need to run TTS while GPT is running.
+    nvigi::TTSASqFlowRuntimeParameters  runtime{};
+    cbkCtx.ttsExecCtx.instance = nvigiCtx.tts;
+    cbkCtx.ttsExecCtx.callback = &TTSInferenceDataCallback;
+    cbkCtx.ttsExecCtx.callbackUserData = &cbkCtx;
+    cbkCtx.ttsExecCtx.runtimeParameters = runtime;
+    nvigi::InferenceDataTextSTLHelper inputPathTargetSpectrogram(targetPathSpectrogram);
+
+    // Initialize data bugger with empty string
+    std::string inputChunk = "";
+    cbkCtx.dataTextTTS = nvigi::InferenceDataTextSTLHelper(inputChunk);
+    std::vector<nvigi::InferenceDataSlot> slots = { {nvigi::kTTSDataSlotInputText, cbkCtx.dataTextTTS},
+                                                    {nvigi::kTTSDataSlotInputTargetSpectrogramPath, inputPathTargetSpectrogram } };
+    nvigi::InferenceDataSlotArray inputs = { slots.size(), slots.data() };
+    cbkCtx.ttsExecCtx.inputs = &inputs;
+
+    // Initialize timer time to first audio
+    cbkCtx.startTimeToFirstAudio = std::chrono::high_resolution_clock::now();
     if (hasAudio)
     {
         if (ASRInference(cbkCtx, audioData, gptInputText))
@@ -736,6 +956,26 @@ int RunInference(bool& hasAudio, nvigi::InferenceDataAudioSTLHelper& audioData, 
     if (GPTInference(cbkCtx, gptInputText))
         return -1;
 
+    // TTS inference is executed within GPT inference
+
+    // If an audio is playing, wait for it to finish and destroy the corresponding threads
+    while (true) {
+        std::lock_guard<std::mutex> lock(cbkCtx.callbackMutex);
+        std::unique_ptr<std::thread> thread;
+        {
+            if (cbkCtx.playAudioThreads.empty())
+                break;
+            thread = std::move(cbkCtx.playAudioThreads.front());
+            cbkCtx.playAudioThreads.pop();
+        }
+
+        if (thread->joinable()) {
+            thread->join();
+        }
+    }
+    cbkCtx.ttsOutput.clear();
+    cbkCtx.ttsOutput.shrink_to_fit();
+
     return 0;
 }
 
@@ -743,15 +983,17 @@ int main(int argc, char** argv)
 {
 
     CommandLineParser parser;
-    parser.add_command("s", "sdk", "sdk location, if none provided assuming exe location", "");
-    parser.add_command("m", "models", "model repo location", "", true);
-    parser.add_command("a", "audio", "audio file location", "", false); // used only for Linux
-    parser.add_command("", "gpt", "gpt mode, 'local' or 'cloud' (model GUID determines cloud endpoint)", "local");
-    parser.add_command("", "gpt-guid", "gpt model guid in registry format", "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}");
-    parser.add_command("", "asr-guid", "asr model guid in registry format", "{5CAD3A03-1272-4D43-9F3D-655417526170}");
-    parser.add_command("t", "token", "authorization token for the cloud provider", "");
-    parser.add_command("t", "token", "authorization token for the cloud provider", "");
-    parser.add_command("", "vram", "the amount of vram to use in MB", "8192");
+    parser.add_command("s", "sdk", " sdk location, if none provided assuming exe location", "");
+    parser.add_command("m", "models", " model repo location", "", true);
+    parser.add_command("", "targetPathSpectrogram", " target path of the spectrogram of the voice you want to clone", "", true);
+    parser.add_command("", "extendedPhonemeDict", " path to the extendend phonemes dictionary for ASqFlow TTS model", "", false);
+    parser.add_command("a", "audio", " audio file location", "", false); // used only for Linux
+    parser.add_command("", "gpt", " gpt mode, 'local' or 'cloud' (model GUID determines cloud endpoint)", "local");
+    parser.add_command("", "gpt-guid", " gpt model guid in registry format", "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}");
+    parser.add_command("", "asr-guid", " asr model guid in registry format", "{5CAD3A03-1272-4D43-9F3D-655417526170}");
+    parser.add_command("", "tts-guid", " tts model guid in registry format", "{81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F}");
+    parser.add_command("t", "token", " authorization token for the cloud provider", "");
+    parser.add_command("", "vram", " the amount of vram to use in MB", "8192");
 
     try {
         parser.parse(argc, argv);
@@ -768,8 +1010,10 @@ int main(int argc, char** argv)
 
     // Mandatory so we know that they are provided
     std::string modelDir = parser.get("models");
+    std::string targetPathSpectrogram = parser.get("targetPathSpectrogram");
 
     // Defaults
+    auto extendedPhonemeDict = parser.get("extendedPhonemeDict");
     auto audioFile = parser.get("audio");
     size_t vramBudgetMB = (size_t)atoi(parser.get("vram").c_str());
 
@@ -804,6 +1048,13 @@ int main(int argc, char** argv)
             return -1;
     }
 
+#ifdef NVIGI_WINDOWS
+    {
+        auto guidTTS = parser.get("tts-guid");
+        if (InitTTS(modelDir, extendedPhonemeDict, guidTTS, vramBudgetMB))
+            return -1;
+    }
+#endif
     {
         //////////////////////////////////////////////////////////////////////////////
         //! Run inference
@@ -811,7 +1062,9 @@ int main(int argc, char** argv)
         bool running = true;
         bool hasAudio = false;
         bool conversationInitialized = false;
-        std::string gptInputText = "This is a transcript of a dialog between a user and a helpful AI assistant.\n";
+        std::string gptInputText = "This is a transcript of a dialog between a user and a helpful AI assistant.\
+ Generate only medium size answers and avoid describing what you are doing physically.\
+ Avoid using specific words that are not part of the dictionary.\n";
 
 #ifdef NVIGI_WINDOWS
         nvigi::InferenceDataAudioSTLHelper audioData;
@@ -821,7 +1074,7 @@ int main(int argc, char** argv)
 
         do
         {
-            if (RunInference(hasAudio, audioData, gptInputText, conversationInitialized))
+            if (RunInference(hasAudio, audioData, targetPathSpectrogram, gptInputText, conversationInitialized))
                 return -1;
 
             conversationInitialized = true;
@@ -866,6 +1119,11 @@ int main(int argc, char** argv)
 
     if (ReleaseGPT())
         return -1;
+
+#if NVIGI_WINDOWS
+    if (ReleaseTTS())
+        return -1;
+#endif
 
     if (ShutdownNVIGI())
         return -1;

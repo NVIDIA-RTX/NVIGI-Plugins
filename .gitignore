@@ -42,3 +42,6 @@ docs/_*/
 
 /nvigi_core
 
+!/data/nvigi.test/nvigi.tts/
+/data/nvigi.test/nvigi.tts/openvoice/output_tests/
+

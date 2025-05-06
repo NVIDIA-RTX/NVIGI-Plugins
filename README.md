@@ -1,5 +1,5 @@
 # NVIDIA In-Game Inference AI Plugins
-Version 1.1.0 Release
+Version 1.1.1 Release
 
 In-Game Inferencing (NVIGI) is an open-sourced cross platform solution that simplifies integration of the latest NVIDIA and other provider's technologies into applications and games. This framework allows developers to easily implement one single integration and enable multiple technologies supported by the hardware vendor or cloud provider. Supported technologies include AI inference but, due to the generic nature of the NVIGI SDK, can be expanded to graphics or any other field of interest.
 
@@ -134,6 +134,7 @@ When changing an existing project's settings or contents (ie: adding a new sourc
 - [Automatic Speech Recognition](docs/ProgrammingGuideASRWhisper.md)
 - [Embedding](docs/ProgrammingGuideEmbed.md)
 - [Generative Pre-Trained Transformer](docs/ProgrammingGuideGPT.md)
+- [Asqflow TTS](docs/ProgrammingGuideTTSASqFlow.md)
 
 ## Sample App and Source
 

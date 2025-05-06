@@ -441,7 +441,7 @@ if(useGPT)
     {
         //! IMPORTANT: Wait for the callback to receive nvigi::InferenceExecutionStateDone before proceeding here
 
-        // Display response from GPT on screen
+        // Display response from GPT on screen and or use TTS to play the response
 
         // Now we enter the conversation
         while(runConversation)
@@ -464,7 +464,7 @@ if(useGPT)
 
             //! IMPORTANT: Wait for the callback to receive nvigi::InferenceExecutionStateDone before proceeding
 
-            // Display response from GPT on screen
+            // Display response from GPT on screen and or use TTS to play the response
         }
     }    
 }

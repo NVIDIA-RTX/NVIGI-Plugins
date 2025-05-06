@@ -13,7 +13,7 @@
 // (The API Version of each plugin must be set to the CoreSDK API version against which it was built)
 #define SHARED_VERSION_MAJOR 1
 #define SHARED_VERSION_MINOR 1
-#define SHARED_VERSION_PATCH 0
+#define SHARED_VERSION_PATCH 1
 #if defined(NVIGI_PRODUCTION)
 #define BUILD_CONFIG_INFO "PRODUCTION"
 #elif defined(NVIGI_DEBUG)

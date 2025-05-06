@@ -31,6 +31,12 @@
 		<package name="openssl" version="3.2.0_x64-windows" platforms="windows-x86_64"/>
 		<package name="openssl" version="3.2.0_x64-linux" platforms="linux-x86_64"/>
 	</dependency>
+	<dependency name="SimpleFarForTTS" linkPath="external/SimpleFarForTTS">
+		<package name="SimpleFarForTTS" version="0.0.2" platforms="windows-x86_64"/>
+	</dependency>
+	<dependency name="tensorrt" linkPath="external/tensorrt">
+		<package name="tensorrt" version="10.6.0.26-cuda-12.6-ga-windows-x86_64" platforms="windows-x86_64"/>
+	</dependency>
 	<dependency name="whispercpp" linkPath="external/whisper.cpp">
 		<package name="whisper.cpp" version="45e8a3b_x64-windows-cuda" platforms="windows-x86_64"/>
 		<package name="whispercpp" version="45e8a3b_x64-linux" platforms="linux-x86_64"/>
