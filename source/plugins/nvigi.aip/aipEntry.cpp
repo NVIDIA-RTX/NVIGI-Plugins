@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 
@@ -306,6 +306,11 @@ nvigi::Result aipEvaluate(nvigi::InferenceExecutionContext* execCtx)
         for (auto ptr : byteData)
         {
             delete ptr;
+        }
+
+        for (auto& values : data->outputs)
+        {
+            values.clear();
         }
     }
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 
@@ -63,6 +63,10 @@ inline std::vector<int16_t> read(const char* fname)
     try
     {
         fs::path p(fname);
+        if (!fs::exists(p) || fs::status(p).type() != fs::file_type::regular)
+        {
+            return {};
+        }
         size_t file_size = fs::file_size(p);
         std::vector<int16_t> ret_buffer(file_size/2);
 #ifdef NVIGI_LINUX
@@ -154,7 +158,11 @@ int InitNVIGI(NVIGIAppCtx& nvigiCtx, const std::string& pathToSDKUtf8)
     };
 
     nvigi::Preferences pref{};
+#ifdef _DEBUG
     pref.logLevel = nvigi::LogLevel::eVerbose;
+#else
+    pref.logLevel = nvigi::LogLevel::eOff;
+#endif
     pref.showConsole = true;
     pref.numPathsToPlugins = 1;
     pref.utf8PathsToPlugins = paths;
@@ -400,7 +408,16 @@ int main(int argc, char** argv)
     //////////////////////////////////////////////////////////////////////////////
     //! Run inference
     //! 
-
+    auto checkPath = [](std::string const& s)
+        {
+            return s.size() < 512
+                && s.find("://") == s.npos;
+        };
+    if (!checkPath(audioFile))
+    {
+        loggingCallback(nvigi::LogType::eError, "Provided audio file path does not meet requirements. Provided path must be at most 512 char long and must not contain '://'");
+        return -1;
+    }
     auto wav = read(audioFile.c_str());
     if (wav.empty())
     {

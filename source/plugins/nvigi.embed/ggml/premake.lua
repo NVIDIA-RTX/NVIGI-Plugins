@@ -78,7 +78,7 @@ project "nvigi.plugin.embed.ggml.cuda"
 			external_dir_llamacpp .. "/cuda/lib64/",
 		}
 		linkoptions {"-fopenmp", "-lcublas"}
-		links {"llama", "common", "ggml", "ggml-base","ggml-cpu","ggml-cuda","cuda", "cublas", "dl", "pthread", "rt"}
+		links {"common", "llama", "ggml", "ggml-base","ggml-cpu","ggml-cuda","cuda", "cublas", "dl", "pthread", "rt"}
 
 	filter {}
 
@@ -142,6 +142,6 @@ project "nvigi.plugin.embed.ggml.cpu"
 			external_dir_llamacpp .. "/cpu/lib64/",
 		}
 		linkoptions {"-fopenmp"}
-		links {"llama", "common", "ggml", "ggml-base","ggml-cpu","dl", "pthread", "rt"}
+		links {"common", "llama", "ggml", "ggml-base","ggml-cpu","dl", "pthread", "rt"}
 
 group ""

@@ -3,19 +3,25 @@
 
 The focus of this guide is on using In-Game Inferencing to integrate an ASR Whisper model into an application. More details can be found here [OpenAI Whisper](https://openai.com/research/whisper)
 
-Please read the `docs/ProgrammingGuideAI.md` located in the NVIGI Core package to learn more about overall AI inference API in NVIGI SDK. :only:`binary_pack:[Which may be found here in combined binary packs](../../../nvigi_core/docs/ProgrammingGuideAI.md)` 
+Please read the `docs/ProgrammingGuideAI.md` :only:`binary_pack:([Which may be found here in combined binary packs](../../../nvigi_core/docs/ProgrammingGuideAI.md))` located in the NVIGI Core package to learn more about overall AI inference API in NVIGI SDK.
 
-> **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the  [basic sample](../source/samples/nvigi.basic/basic.cpp)
+> **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the SDK's Basic command line sample [Source Code](../source/samples/nvigi.basic/basic.cpp) and [Docs](../docs/Samples.md).  The Basic command-line sample includes the option to record audio and converting it to a text query for an LLM via the ASR plugins.
 
-## Version 1.1.0 General Access
+> **IMPORTANT NOTE: The D3D12 backend (nvigi.plugin.asr.ggml.d3d12.dll) is provided only precompiled as a part of the downloadable binary pack (`nvigi_pack`).  It is not possible for developers to compile the D3D12 backend plugin from source in this release.**
+
+> **IMPORTANT NOTE: The D3D12 backend (nvigi.plugin.asr.ggml.d3d12.dll) requires an NVIDIA R580 driver or newer in order to be available at runtime.**
+
+> **IMPORTANT NOTE: The CUDA backend (nvigi.plugin.asr.ggml.cuda.dll) strongly recommends an NVIDIA R580 driver or newer in order to avoid a potential memory leak if CiG (CUDA in Graphics) is used and the application deletes D3D12 command queues mid-application.**
 
 ## 1.0 INITIALIZE AND SHUTDOWN
 
-Please read the `docs/ProgrammingGuide.md` located in the NVIGI Core package to learn more about initializing and shutting down NVIGI SDK. :only:`binary_pack:[Which may be found here in combined binary packs](../../../nvigi_core/docs/ProgrammingGuide.md)` 
+Please read the `docs/ProgrammingGuide.md`  :only:`binary_pack:([Which may be found here in combined binary packs](../../../nvigi_core/docs/ProgrammingGuide.md))` located in the NVIGI Core package to learn more about initializing and shutting down NVIGI SDK. 
 
 ## 2.0 OBTAIN ASR INTERFACE
 
-Next, we need to retrieve ASR's API interface based on what variant we need (CPU, CUDA, etc.)   **NOTE** only the local inference plugins are provided/supported in this early release.  The cloud plugins will be added in a later release:
+Next, we need to retrieve ASR's API interface based on what variant we need (CPU, CUDA, D3D12, Vulkan etc.)   **NOTE** only the local inference plugins are provided/supported in this early release.  The cloud plugins will be added in a later release:
+
+> **IMPORTANT NOTE: D3D12 and Vulkan backends are experimental and might not behave or perform as expected.**
 
 ```cpp
 
@@ -99,18 +105,26 @@ nvigi::InferenceInstance* asrInstanceLocal;
         // handle error
     }
 ```
-Next we need to provide information about D3D12 properties if our application is planning to leverage `CiG` (CUDA In Graphics)
+Next we need to provide information about D3D12 properties if our application is running with a D3D12 context or planning to leverage `CiG` (CUDA In Graphics)
+
+> NOTE: For Vulkan requirements please see section in the Appendix
+
 ```cpp
+    //! Required if using D3D12 context
     nvigi::D3D12Parameters d3d12Params{};
-    d3d12Params.device = myDevice;
-    d3d12Params.queue = myDirectQueue; // mandatory to use CIG
-    d3d12Params.queueCompute = myComputeQueue; // optional
-    d3d12Params.queueCopy = myCopyQueue; // optional
+    d3d12Params.device = myDevice; // mandatory, must support sm_6_6 or higher if using D3D12
+    d3d12Params.queue = myDirectQueue; // mandatory to use CIG, optional for D3D12, if provided AI miscellaneous D3D12 workloads will be executed on this queue
+    d3d12Params.queueCompute = myComputeQueue; // optional, if provided AI compute D3D12 workloads will be executed on this queue
+    d3d12Params.queueCopy = myCopyQueue; // optional, if provided AI copy D3D12 workloads will be executed on this queue
     if(NVIGI_FAILED(params.chain(d3d12Params)))
     {
         // handle error
     }
+```
 
+> IMPORTANT: Do NOT chain the same parameters to the multiple parameter chains, the recommended approach is to make a copy per chain. For example, creating an ASR and GPT instance with shared d3d12Params can result in re-chaining the input parameters the wrong way which then results in failed instance creation.
+
+```cpp
     
     if(NVIGI_FAILED(res, iasrLocal->createInstance(params, &asrInstanceLocal)))
     {
@@ -118,6 +132,8 @@ Next we need to provide information about D3D12 properties if our application is
     }
 }
 ```
+
+> **IMPORTANT**: Providing D3D or Vulkan device and queue is highly recommended to ensure optimal performance
 
 ## 4.0 AUDIO INPUT
 
@@ -323,9 +339,142 @@ if(NVIGI_FAILED(result, nvigiUnloadInterface(nvigi::plugin::asr::ggml::cuda::kId
 
 ## APPENDIX
 
-### MEMORY TRACKING 
+### WHISPER.CPP
 
-#### CUDA
+The `nvigi.plugin.asr.ggml.{$backend}` plugins use a specific snapshot of whisper.cpp therefore it is not guaranteed that NVIGI version will match the latest whisper.cpp capabilities. When comparing the two please note the following:
+
+* NVIGI version is compiled with potentially different CPU flags (lowest common denominator to allow wide CPU support, not necessarily including the latest greatest CPU features)
+* NVIGI input parameters should be modified to match whisper.cpp 1:1 (context size, batch size, number of threads etc.) when comparing performance
+* NVIGI version is modified to **allow optimal execution inside of a process** (especially when it comes to CUDA in Graphics) hence it might NOT perform as fast as whisper.cpp on an idle GPU
+* Performance and capabilities of whisper.cpp change on daily basis, NVIGI version will be updated at much slower cadence 
+
+#### D3D12
+
+When using D3D12 backend, the host application must created a device which supports shader model 6.6 or higher. To ensure proper support across various Windows OS versions the recommended approach is to include `Microsoft Agility SDK version 1.600.0` or newer with your executable by adding the following code:
+
+```cpp
+extern "C" __declspec(dllexport) UINT         D3D12SDKVersion = 610; // Change this as needed to reflect the version you want to use
+extern "C" __declspec(dllexport) const char * D3D12SDKPath    = ".\\D3D12\\";
+```
+> NOTE: `D3D12` folder must be created next to the executable and it must contain `D3D12Core.dll` which is provided with the Agility SDK
+
+The additional benefit of including the latest Agility SDK is the performance enhancement which comes with the introduction of the new heap type `D3D12_HEAP_TYPE_GPU_UPLOAD`. This new feature enables simultaneous CPU and GPU access to VRAM via the Resizable BAR (ReBAR) mechanism-was introduced to the DirectX 12 API through the Direct3D Agility SDK and corresponding Windows updates. This feature allows for more efficient data transfers, reducing the need for CPU-to-GPU copy operations and potentially improving performance in certain scenarios. For more details please visit https://devblogs.microsoft.com/directx/preview-agility-sdk-1-710-0/
+
+| Feature                | First Supported Windows OS                       | First Supported Agility SDK Version   |
+|------------------------|--------------------------------------------------|---------------------------------------|
+| GPU UPLOAD HEAP (ReBAR)| Windows 11 Insider Preview Build 26080 or later  | 1.613.0                               |
+
+> IMPORTANT: Please note that on some systems ReBAR must be explicitly enabled in the BIOS.
+
+In addition to the above, it is also required to distribute `dxcompiler.dll` with your application.
+
+
+#### VULKAN
+
+> NOTE: This section is relevant only if the host application is providing `nvigi::VulkanParameters` to the NVIGI ASR plugin
+
+Here are the Vulkan requirements:
+
+* `VkInstance` must be created with the API 1.3.0 or higher
+* `VkDevice` must be created with `VkPhysicalDeviceFeatures2`, `VkPhysicalDeviceVulkan11Features` and `VkPhysicalDeviceVulkan12Features` chained to the `VkDeviceCreateInfo`
+* The following extensions must be enabled if physical device supports them:
+
+```cpp
+"VK_EXT_pipeline_robustness",
+"VK_KHR_maintenance4",
+"VK_EXT_subgroup_size_control",
+"VK_KHR_16bit_storage",
+"VK_KHR_shader_float16_int8",
+"VK_KHR_cooperative_matrix",
+"VK_NV_cooperative_matrix2"
+```
+> NOTE: If certain extensions are not available the appropriate fallbacks will be used if possible
+
+#### MEMORY TRACKING 
+
+##### VULKAN
+
+NVIGI provides callback mechanism to track/allocated/free GPU resources as defined in the `nvigi_vulkan.h` header. Here is an example:
+
+```cpp
+VkResult allocateMemoryVK(VkDevice device, VkDeviceSize size, uint32_t memoryTypeIndex, VkDeviceMemory* outMemory) {
+    // Define the memory allocation info
+    VkMemoryAllocateInfo allocInfo = {};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = size;           // Size of memory to allocate
+    allocInfo.memoryTypeIndex = memoryTypeIndex; // Memory type (e.g., from vkGetPhysicalDeviceMemoryProperties)
+
+    // Allocate the memory
+    VkDeviceMemory memory;
+    VkResult result = vkAllocateMemory(device, &allocInfo, nullptr, &memory);
+
+    if (result != VK_SUCCESS) {
+        // Handle error (e.g., VK_ERROR_OUT_OF_DEVICE_MEMORY)
+        return result;
+    }
+
+    // Output the allocated memory handle
+    *outMemory = memory;
+    gpuResourceCount++;
+    gpuResourceAllocation = std::max(gpuResourceAllocation.load(), size);
+    return VK_SUCCESS;
+}
+
+void freeMemoryVK(VkDevice device, VkDeviceMemory memory) {
+    if (memory != VK_NULL_HANDLE) {
+        gpuResourceCount--;
+        vkFreeMemory(device, memory, nullptr);
+    }
+}
+
+VulkanParameters params = {};
+params.allocateMemoryCallback = allocateMemoryVK;
+params.freeMemoryCallback = freeMemoryVK;
+```
+
+##### D3D12
+
+NVIGI provides callback mechanism to track/allocated/free GPU resources as defined in the `nvigi_d3d12.h` header. Here is an example:
+
+```cpp
+// Example definition of the d3d12 callbacks when passed as D3D12Parameters:
+//
+// NOTE: "REFIID riidResource" is not passed as a parameter as the ID3D12Resource has a fixed UID derived with the IID_PPV_ARGS macro
+// 
+ID3D12Resource* createCommittedResource(
+     ID3D12Device* device, const D3D12_HEAP_PROPERTIES* pHeapProperties,
+     D3D12_HEAP_FLAGS HeapFlags, const D3D12_RESOURCE_DESC* pDesc,
+     D3D12_RESOURCE_STATES InitialResourceState, const D3D12_CLEAR_VALUE* pOptimizedClearValue,
+     void* userContext
+ )
+{
+    ID3D12Resource* resource = nullptr;
+    HRESULT hr = device->CreateCommittedResource(pHeapProperties, HeapFlags, pDesc, InitialResourceState, pOptimizedClearValue, IID_PPV_ARGS(&resource));
+    if (FAILED(hr))
+    {
+        // Handle error
+        return nullptr;
+    }
+    if(userContext)
+    {
+        // Do something with userContext
+    }
+    return resource;
+}
+
+void destroyResource(ID3D12Resource* pResource, void* userContext)
+{
+     pResource->Release();
+}
+
+D3D12Parameters params = {};
+params.createCommittedResourceCallback = createCommittedResource;
+params.destroyResourceCallback = destroyResource;
+params.createCommitResourceUserContext = nullptr;
+params.destroyResourceUserContext = nullptr;
+```
+
+##### CUDA
 
 NVIGI provides callback mechanism to track/allocated/free GPU resources as defined in the `nvigi_cuda.h` header. Here is an example:
 

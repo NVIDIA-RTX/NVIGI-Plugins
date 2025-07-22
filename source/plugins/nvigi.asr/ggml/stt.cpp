@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 
@@ -27,7 +27,35 @@ using json = nlohmann::json;
 #include "source/utils/nvigi.hwi/cuda/push_poppable_cuda_context.h"
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include "nvtx3/nvToolsExt.h"
+#elif defined(GGML_USE_D3D12)
+#include "external/agility-sdk/build/native/include/d3d12.h"
+#include "source/core/nvigi.api/nvigi_d3d12.h"
+#include "source/plugins/nvigi.hwi/d3d12/nvigi_hwi_d3d12.h"
+#include "source/utils/nvigi.d3d12/d3d12_helpers.h"
+#if PROFILE_D3D
+#include "nvtx3/nvToolsExt.h"
 #endif
+namespace nvigi {
+    // this should match the PFun_commandListAction defined in WhisperCPP - redefining as it's at a depth/scope in WhisperCPP not exposed to IGI
+    using PFun_commandListAction = void(ID3D12CommandList* pCommandList, int action);
+}
+extern void ggml_d3d12_set_params(ID3D12Device* device, ID3D12CommandQueue* cmd_queue_direct,
+    ID3D12CommandQueue* cmd_queue_compute, ID3D12CommandQueue* cmd_queue_copy,
+    nvigi::PFun_createCommittedResource* createCommittedResource, nvigi::PFun_destroyResource* destroyResource,
+    void* userContextCreate, void* userContextDestroy, bool allowReBAR, nvigi::PFun_commandListAction* commandListAction);
+#elif defined GGML_USE_VULKAN
+#include "external/vulkanSDK/include/vulkan/vulkan.h"
+#include "source/core/nvigi.api/nvigi_vulkan.h"
+extern void ggml_set_vk_params(VkPhysicalDevice physicalDevice, VkDevice device, VkQueue cmd_queue_direct, VkQueue cmd_queue_compute, VkQueue cmd_queue_copy,
+    nvigi::PFun_allocateMemoryCallback* allocateMemory, nvigi::PFun_freeMemoryCallback* freeMemory,
+    void* userContextAlloc, void* userContextFree);
+#endif
+
+#if defined GGML_USE_VULKAN || defined(GGML_USE_D3D12)
+extern void ggml_vk_backend_free();
+#endif
+
 
 #define NUM_BUFFERS 2
 #define BUFFER_SIZE 4096
@@ -44,19 +72,42 @@ constexpr int kAvailableAudioBufferSize = 0;
 #define NUM_BUFFERS 2
 #define BUFFER_SIZE 4096
 
+static uint32_t replace_all(std::string& str, const std::string& search_str, const std::string& replace_str)
+{
+    uint32_t num_replaced = 0;
+    size_t start_pos = str.find(search_str);
+    while (start_pos != std::string::npos && start_pos < str.length())
+    {
+        str.replace(start_pos, search_str.length(), replace_str);
+        num_replaced++;
+        start_pos += replace_str.length(); // Move past the replacement
+        start_pos = str.find(search_str, start_pos);
+    }
+
+    return num_replaced;
+}
+
 static void whisperLogCallback(ggml_log_level level, const char* text, void* user_data) 
 {
+    std::string msg(text);
+#if defined(GGML_USE_D3D12)
+    // Running Vulkan on DX12 but ggml is unaware, replace Vulkan with D3D12 to avoid confusion
+    replace_all(msg, "Vulkan0", "D3D12(0)");
+    replace_all(msg, "Vulkan1", "D3D12(1)");
+    replace_all(msg, "vulkan", "d3d12");
+    replace_all(msg, "Vulkan", "D3D12");
+#endif
     if (level == GGML_LOG_LEVEL_WARN)
     {
-        NVIGI_LOG("whisper", LogType::eWarn, nvigi::log::YELLOW, "%s", text);
+        NVIGI_LOG("whisper", LogType::eWarn, nvigi::log::YELLOW, "%s", msg.c_str());
     }
     else if (level == GGML_LOG_LEVEL_ERROR)
     {
-        NVIGI_LOG("whisper", LogType::eError, nvigi::log::RED, "%s", text);
+        NVIGI_LOG("whisper", LogType::eError, nvigi::log::RED, "%s", msg.c_str());
     }
     else
     {
-        NVIGI_LOG("whisper", LogType::eInfo, nvigi::log::WHITE, "%s", text);
+        NVIGI_LOG("whisper", LogType::eInfo, nvigi::log::WHITE, "%s", msg.c_str());
     }
 }
 
@@ -84,6 +135,11 @@ struct InferenceContext
     std::vector<cudaStream_t> cuda_streams;
 #endif
 
+#ifdef GGML_USE_D3D12
+    // Used to set the relative priority of GPU inference and graphics
+    ID3D12Device* device{};
+#endif
+
 #if GGML_USE_CUBLAS
     // Use PushPoppableCudaContext defined in push_poppable_cuda_context.h
 #else
@@ -103,6 +159,10 @@ PluginID getFeatureId(InferenceInstanceData* data)
 {
 #if GGML_USE_CUBLAS
     return plugin::asr::ggml::cuda::kId;
+#elif GGML_USE_VULKAN
+    return plugin::asr::ggml::vulkan::kId;
+#elif defined(GGML_USE_D3D12)
+    return plugin::asr::ggml::d3d12::kId;
 #else
     return plugin::asr::ggml::cpu::kId;
 #endif
@@ -139,6 +199,9 @@ struct ASRContext
 
 #ifdef GGML_USE_CUBLAS
     nvigi::IHWICuda* icig{};
+#elif defined(GGML_USE_D3D12)
+    nvigi::IHWID3D12* iscg{};
+    nvigi::system::ISystem* isystem{};
 #endif
 };
 
@@ -183,6 +246,21 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
     auto& params = *creationParams;
     if (!_instance || !common->utf8PathToModels || !common->modelGUID) return nvigi::kResultInvalidParameter;
 
+#ifdef GGML_USE_CUBLAS
+    auto cudaParams = findStruct<CudaParameters>(_params);
+    if (cudaParams && cudaParams->getVersion() >= kStructVersion2)
+    {
+        if (cudaParams->cudaMallocReportCallback)
+            nvigi::asr::setCudaMallocReportCallback(cudaParams->cudaMallocReportCallback, cudaParams->cudaMallocReportUserContext);
+        if (cudaParams->cudaFreeReportCallback)
+            nvigi::asr::setCudaFreeReportCallback(cudaParams->cudaFreeReportCallback, cudaParams->cudaFreeReportUserContext);
+        if (cudaParams->cudaMallocCallback)
+            nvigi::asr::setCudaMallocCallback(cudaParams->cudaMallocCallback, cudaParams->cudaMallocUserContext);
+        if (cudaParams->cudaFreeCallback)
+            nvigi::asr::setCudaFreeCallback(cudaParams->cudaFreeCallback, cudaParams->cudaFreeUserContext);
+    }
+#endif
+
     using namespace nvigi::asr;
     auto& ctx = (*asr::getContext());
 
@@ -191,7 +269,7 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
     auto instanceData = new nvigi::asr::InferenceContext(_params);
     if (!instanceData->cudaContext.constructorSucceeded) return kResultInvalidState;
 
-#if GGML_USE_CUBLAS
+#if defined(GGML_USE_CUBLAS)
     if (common->numThreads > 1)
     {
         NVIGI_LOG_WARN("For optimal performance when using CUDA only one CPU thread is used");
@@ -201,9 +279,10 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
     instanceData->params.n_threads = common->numThreads;
 #endif
 
+
     instanceData->params.language = params.language ? params.language : "en";
 
-#if defined(GGML_USE_CUBLAS)
+#if defined(GGML_USE_CUBLAS) || defined(GGML_USE_VULKAN) || defined(GGML_USE_D3D12)
 #ifndef NVIGI_PRODUCTION
     size_t currentUsageMB{};
     extra::ScopedTasks vram([&currentUsageMB]() {
@@ -236,7 +315,7 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
         {
             files = ctx.modelInfo[common->modelGUID]["gguf"];
 
-#if defined(GGML_USE_CUBLAS)
+#if defined(GGML_USE_CUBLAS) || defined(GGML_USE_VULKAN) || defined(GGML_USE_D3D12)
             size_t neededVRAM = ctx.modelInfo[common->modelGUID]["vram"];
             if (common->vramBudgetMB < neededVRAM)
             {
@@ -267,6 +346,75 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
             cudaStream_t stream{};
             cudaError_t err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
 #endif
+#ifdef GGML_USE_VULKAN
+            auto vkParams = findStruct<VulkanParameters>(_params);
+            if (vkParams)
+            {
+                ggml_set_vk_params(vkParams->physicalDevice, vkParams->device, vkParams->queue, vkParams->queueCompute, vkParams->queueTransfer,
+                    vkParams->allocateMemoryCallback, vkParams->freeMemoryCallback,
+                    vkParams->allocateMemoryCallbackUserContext, vkParams->freeMemoryCallbackUserContext);
+            }
+#elif defined(GGML_USE_D3D12)
+            auto d3d12Params = findStruct<D3D12Parameters>(_params);
+            if (NVIGI_FAILED(res, d3d12::validateParameters(d3d12Params)))
+            {
+                return res;
+            }
+
+            VendorId vendor{};
+            if (NVIGI_FAILED(res, d3d12::getDeviceVendor(d3d12Params, ctx.isystem, vendor)))
+            {
+                return res;
+            }
+            if (vendor == VendorId::eNVDA)
+            {
+                if (!ctx.iscg && !framework::getInterface(plugin::getContext()->framework, plugin::hwi::d3d12::kId, &ctx.iscg))
+                {
+                    NVIGI_LOG_ERROR("Missing interface from 'nvigi.plugin.hwi.d3d12'");
+                    return kResultInvalidState;
+                }
+
+                if (NVIGI_FAILED(res, d3d12::applyNVDASpecificSettings(d3d12Params, ctx.iscg)))
+                {
+                    return res;
+                }
+            }
+
+            auto applySchedulingModeCallback = [](ID3D12CommandList* pCommandList, int action)
+                {
+                    // Don't check iscg and version every call, because we do it once when callback is registered
+                    IHWID3D12* iscg = asr::getContext()->iscg;
+                    ID3D12GraphicsCommandList* pGraphicsCommandList = nullptr;
+                    if (SUCCEEDED(pCommandList->QueryInterface<ID3D12GraphicsCommandList>(&pGraphicsCommandList)))
+                    {
+                        iscg->d3d12ApplyGlobalGpuInferenceSchedulingModeToCommandList(pGraphicsCommandList);
+                    }
+                };
+
+            // Do iscg and version checks now to avoid doing them inside every callback       
+            PFun_commandListAction* CLresetCallback = nullptr;
+            IHWID3D12* iscg = asr::getContext()->iscg;
+            if (iscg)
+            {
+                if (iscg->getVersion() >= 4)
+                {
+                    CLresetCallback = applySchedulingModeCallback;
+                }
+                else
+                {
+                    NVIGI_LOG_WARN_ONCE("We need version 4 of hwi.d3d12 in order to set D3D12 compute scheduling mode, and version available is %d. Performance may be suboptimal.\n", iscg->getVersion());
+                }
+            }
+            else
+            {
+                NVIGI_LOG_WARN_ONCE("hwi.d3d12 was not loaded, so couldn't set D3D12 compute scheduling mode. Performance may be suboptimal.\n");
+            }
+
+            bool allowReBAR = d3d12Params->getVersion() < 3 || !(d3d12Params->flags & nvigi::D3D12ParametersFlags::eDisableReBAR);
+            ggml_d3d12_set_params(d3d12Params->device, d3d12Params->queue, d3d12Params->queueCompute, d3d12Params->queueCopy,
+                d3d12Params->createCommittedResourceCallback, d3d12Params->destroyResourceCallback, d3d12Params->createCommitResourceUserContext, d3d12Params->destroyResourceUserContext, allowReBAR, CLresetCallback);
+
+#endif
             struct whisper_context_params cparams = whisper_context_default_params();
             if (params._base.version >= kStructVersion2)
             {
@@ -277,8 +425,24 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
             auto cudaParams = findStruct<CudaParameters>(_params);
             cparams.gpu_device = cudaParams ? cudaParams->device : 0;
 #endif
-            instanceData->model = whisper_init_from_file_with_params(pathToModel.c_str(),cparams);
+            try
+            {
+                instanceData->model = whisper_init_from_file_with_params(pathToModel.c_str(), cparams);
+            }
+            catch (std::exception& e)
+            {
+                NVIGI_LOG_ERROR("%s", e.what());
+                delete instanceData;
+                return kResultInvalidState;
+            }
 
+            // Check before doing anything else
+            if (!instanceData->model)
+            {
+                NVIGI_LOG_ERROR("Call to 'whisper_init_from_file_with_params' failed");
+                delete instanceData;
+                return kResultInvalidState;
+            }
 #if GGML_USE_CUBLAS
             // We ask whisper for all the cuda_streams it is going to use and 
             // store them to enable us to change their priorities dynamically
@@ -287,24 +451,23 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
             whisper_get_cuda_streams(instanceData->model, (void**)instanceData->cuda_streams.data(), stream_count);
 
             // Apply the global priority to all streams
-            if (ctx.icig->getVersion() >= 2)
+            if (instanceData->cudaContext.usingCiG && ctx.icig->getVersion() >= 2)
             {
                 nvigi::Result cuerr = ctx.icig->cudaApplyGlobalGpuInferenceSchedulingMode(instanceData->cuda_streams.data(), instanceData->cuda_streams.size());
                 if (cuerr != kResultOk)
                 {
-                    NVIGI_LOG_WARN("Could not set relative priority of compute and graphics. Please use 575 driver or higher\n");
+                    NVIGI_LOG_WARN_ONCE("Could not set relative priority of compute and graphics. Please use 575 driver or higher\n");
                 }
             }
 #endif
         }
-        if (!instanceData->model)
-        {
-            NVIGI_LOG_ERROR("Call to 'whisper_init_from_file_with_params' failed");
-            delete instanceData;
-            return kResultInvalidState;
-        }
+        
 #if GGML_USE_CUBLAS
         auto platform = "ggml.cuda";
+#elif GGML_USE_VULKAN
+        auto platform = "ggml.vulkan";
+#elif defined(GGML_USE_D3D12)
+        auto platform = "ggml.d3d12";
 #else
         auto platform = "ggml.cpu";
 #endif
@@ -350,7 +513,7 @@ nvigi::Result whisperGetCapsAndRequirements(nvigi::NVIGIParameter** _info, const
     info->supportedLanguages = s_languages;
 
     // CUDA or CPU backend
-#if defined(GGML_USE_CUBLAS)
+#if defined(GGML_USE_CUBLAS) || defined(GGML_USE_VULKAN) || defined(GGML_USE_D3D12)
     info->common->supportedBackends = nvigi::InferenceBackendLocations::eGPU | nvigi::InferenceBackendLocations::eCPU;
 #else
     info->common->supportedBackends = nvigi::InferenceBackendLocations::eCPU;
@@ -364,6 +527,10 @@ nvigi::Result whisperGetCapsAndRequirements(nvigi::NVIGIParameter** _info, const
 
 nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async)
 {
+#if GGML_USE_CUBLAS || (defined(GGML_USE_D3D12) && PROFILE_D3D)
+    nvtxRangePushA("whisperEvaluate");
+#endif
+
     auto& ctx = (*asr::getContext());
 
     // Validate all inputs first
@@ -440,7 +607,7 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
 #if GGML_USE_CUBLAS
     // We apply the global scheduling mode to our streams at every evaluate() 
     // to reflect any changes the user made to the global mode between calls
-    if (ctx.icig->getVersion() >= 2)
+    if (instance->cudaContext.usingCiG && ctx.icig->getVersion() >= 2)
     {
         nvigi::Result err = ctx.icig->cudaApplyGlobalGpuInferenceSchedulingMode(instance->cuda_streams.data(), instance->cuda_streams.size());
         if (err != kResultOk)
@@ -684,6 +851,11 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
         }
         result = runInference();
     }
+
+#if GGML_USE_CUBLAS || (defined(GGML_USE_D3D12) && PROFILE_D3D)
+    nvtxRangePop();
+#endif
+
     return result;
 }
 
@@ -733,17 +905,67 @@ Result nvigiPluginGetInfo(nvigi::framework::IFramework* framework, nvigi::plugin
     info.build = GIT_BRANCH_AND_LAST_COMMIT;
     info.interfaces = { plugin::getInterfaceInfo<IAutoSpeechRecognition>()};
 
-#if GGML_USE_CUBLAS
-    info.minDriver = { NVIGI_CUDA_MIN_DRIVER_MAJOR, NVIGI_CUDA_MIN_DRIVER_MINOR, NVIGI_CUDA_MIN_DRIVER_BUILD };
+    // Always the same OS requirements
     info.minOS = { NVIGI_DEF_MIN_OS_MAJOR, NVIGI_DEF_MIN_OS_MINOR, NVIGI_DEF_MIN_OS_BUILD };
+
+    // Default to no GPU requirements for now
+    info.minGPUArch = {};
+    info.minDriver = {};
+
+#ifdef GGML_USE_CUBLAS
+    info.minDriver = { NVIGI_CUDA_MIN_DRIVER_MAJOR, NVIGI_CUDA_MIN_DRIVER_MINOR, NVIGI_CUDA_MIN_DRIVER_BUILD };
     info.minGPUArch = { NVIGI_CUDA_MIN_GPU_ARCH };
     info.requiredVendor = VendorId::eNVDA;
+
+    nvigi::system::ISystem* isystem{};
+    if (!framework::getInterface(framework, nvigi::core::framework::kId, &isystem))
+    {
+        NVIGI_LOG_ERROR("Missing interface from 'nvigi.plugin.hwi.cuda'");
+        return kResultInvalidState;
+    }
+
+    const nvigi::system::SystemCaps* caps = isystem->getSystemCaps();
+    if (caps && caps->driverVersion.major < 580)
+    {
+        NVIGI_LOG_WARN_ONCE("CUDA backend recommends driver version 580 or higher, current version is %d.%d.%d - see documentation for details", caps->driverVersion.major, caps->driverVersion.minor, caps->driverVersion.build);
+	}
+
+    // Must release, as we may not have the chance to release it later if we are not registered
+    framework::releaseInterface(plugin::getContext()->framework, nvigi::core::framework::kId, isystem);
+#elif defined(GGML_USE_D3D12)
+    if (!framework::getInterface(framework, nvigi::core::framework::kId, &ctx.isystem))
+    {
+        NVIGI_LOG_ERROR("Missing interface from 'nvigi.plugin.hwi.cuda'");
+        return kResultInvalidState;
+    }
+
+    // Default to any adapter and no driver restrictions
+    info.requiredVendor = VendorId::eAny;
+
+    // Check if we have an NV adapter available and if so, set the minimum GPU architecture and driver version
+    const nvigi::system::SystemCaps* caps = ctx.isystem->getSystemCaps();
+    for (uint32_t i = 0; i < caps->adapterCount; i++)
+    {
+        const nvigi::system::Adapter* adapter = caps->adapters[i];
+        if (adapter->vendor == VendorId::eNVDA)
+        {
+            info.minGPUArch = { NVIGI_CUDA_MIN_GPU_ARCH };
+            info.minDriver = { NVIGI_D3D12_MIN_DRIVER_MAJOR, NVIGI_D3D12_MIN_DRIVER_MINOR, NVIGI_D3D12_MIN_DRIVER_BUILD };
+            info.requiredVendor = VendorId::eNVDA;
+            break;
+        }
+        // Later, we could add min driver and arch for AMD or other vendors
+    }
+
+    // Must release, as we may not have the chance to release it later if we are not registered
+    framework::releaseInterface(plugin::getContext()->framework, nvigi::core::framework::kId, ctx.isystem);
+    ctx.isystem = nullptr;
+#elif defined(GGML_USE_VULKAN)
+    // Requires SOME GPU with Vulkan support, no specific vendor or driver version
+    info.requiredVendor = VendorId::eAny;
 #else
-    //! Defaults indicate no restrictions - plugin can run on any system, even without any adapter
+    // No requirements for CPU backend
     info.requiredVendor = nvigi::VendorId::eNone;
-    info.minDriver = {};
-    info.minOS = { NVIGI_DEF_MIN_OS_MAJOR, NVIGI_DEF_MIN_OS_MINOR, NVIGI_DEF_MIN_OS_BUILD };
-    info.minGPUArch = {};
 #endif
 
     return kResultOk;
@@ -765,7 +987,13 @@ Result nvigiPluginRegister(framework::IFramework* framework)
     if (!framework::getInterface(plugin::getContext()->framework, plugin::hwi::cuda::kId, &ctx.icig))
     {
         NVIGI_LOG_ERROR("Missing interface from 'nvigi.plugin.hwi.cuda'");
-        return kResultInvalidState;
+        return kResultMissingInterface;
+    }
+#elif defined(GGML_USE_D3D12)
+    if (!framework::getInterface(framework, nvigi::core::framework::kId, &ctx.isystem))
+    {
+        NVIGI_LOG_ERROR("Missing core interface 'nvigi::system::ISystem'");
+        return kResultMissingInterface;
     }
 #endif
 
@@ -791,9 +1019,19 @@ Result nvigiPluginDeregister()
 #if GGML_USE_CUBLAS
     framework::releaseInterface(plugin::getContext()->framework, plugin::hwi::cuda::kId, ctx.icig);
     ctx.icig = nullptr;
+#elif defined(GGML_USE_D3D12)
+    framework::releaseInterface(plugin::getContext()->framework, plugin::hwi::d3d12::kId, ctx.iscg);
+    ctx.iscg = nullptr;
+    framework::releaseInterface(plugin::getContext()->framework, nvigi::core::framework::kId, ctx.isystem);
+    ctx.isystem = nullptr;
 #endif
 
     whisper_log_set(nullptr, nullptr);
+
+#if defined(GGML_USE_VULKAN) || defined(GGML_USE_D3D12)
+    // llama.cpp does not provide a way to free backends explicitly hence the hack
+    ggml_vk_backend_free();
+#endif
 
     // cpu 
     // Reference:  https://ofekshilon.com/2017/11/03/on-omp_wait_policy/

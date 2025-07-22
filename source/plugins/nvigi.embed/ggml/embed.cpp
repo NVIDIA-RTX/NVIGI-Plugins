@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 #pragma once
@@ -31,6 +31,7 @@
 #include "source/utils/nvigi.hwi/cuda/push_poppable_cuda_context.h"
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include "nvtx3/nvToolsExt.h"
 #endif
 
 namespace nvigi
@@ -48,6 +49,11 @@ struct InferenceContext
     json modelInfo;
 
     common_init_result llama_init;
+
+#if GGML_USE_CUBLAS
+    // Used to set the relative priority of GPU inference and graphics
+    std::vector<cudaStream_t> cuda_streams;
+#endif
 
 #if GGML_USE_CUBLAS
     // Use PushPoppableCudaContext defined in push_poppable_cuda_context.h
@@ -108,6 +114,10 @@ struct EmbedContext
     std::vector<size_t> embedding_sizes{};
     std::vector<int> max_position_embeddings{};
     std::vector<common_params> llamacpp_params{};
+
+#ifdef GGML_USE_CUBLAS
+    nvigi::IHWICuda* icig{};
+#endif
 };
 
 nvigi::Result evaluate(nvigi::InferenceExecutionContext* execCtx);
@@ -181,6 +191,21 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
     auto& params = *creationParams;
 
     if (!_instance || !common->utf8PathToModels || !common->modelGUID) return nvigi::kResultInvalidParameter;
+
+#ifdef GGML_USE_CUBLAS
+    auto cudaParams = findStruct<CudaParameters>(_params);
+    if (cudaParams && cudaParams->getVersion() >= kStructVersion2)
+    {
+        if (cudaParams->cudaMallocReportCallback)
+            nvigi::embed::setCudaMallocReportCallback(cudaParams->cudaMallocReportCallback, cudaParams->cudaMallocReportUserContext);
+        if (cudaParams->cudaFreeReportCallback)
+            nvigi::embed::setCudaFreeReportCallback(cudaParams->cudaFreeReportCallback, cudaParams->cudaFreeReportUserContext);
+        if (cudaParams->cudaMallocCallback)
+            nvigi::embed::setCudaMallocCallback(cudaParams->cudaMallocCallback, cudaParams->cudaMallocUserContext);
+        if (cudaParams->cudaFreeCallback)
+            nvigi::embed::setCudaFreeCallback(cudaParams->cudaFreeCallback, cudaParams->cudaFreeUserContext);
+    }
+#endif
 
     if (!ai::isGuid(common->modelGUID))
     {
@@ -272,7 +297,7 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
                 NVIGI_LOG_ERROR("Failed to find model in the expected directory '%s'", common->utf8PathToModels);
                 return kResultInvalidParameter;
             }
-            instanceData->params.model = files[0];
+            instanceData->params.model.path = files[0];
         }
         catch (std::exception& e)
         {
@@ -282,7 +307,7 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
 
 
         {
-            NVIGI_LOG_INFO("Loading model '%s'", instanceData->params.model.c_str());
+            NVIGI_LOG_INFO("Loading model '%s'", instanceData->params.model.path.c_str());
             nvigi::RuntimeContextScope scope(*instanceData);
             // load the model and apply lora adapter, if any
 
@@ -300,7 +325,8 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
             // For non-causal models, batch size must be equal to ubatch size
             instanceData->params.n_ubatch = instanceData->params.n_batch;
             instanceData->params.n_ctx = instanceData->params.n_batch; // context size must be smaller or equal to batch size with the new llama.cpp update
-            instanceData->params.warmup = false;
+            // warmup implicitly creates a cudastream, which cig seems to need to operate correctly.  Previously warmup was causing problems ,but turning it on now (June 2025) appears fine.
+            instanceData->params.warmup = true; 
             instanceData->llama_init = common_init_from_params(instanceData->params);            
             if (!instanceData->llama_init.model)
             {
@@ -311,6 +337,26 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
                 NVIGI_LOG_ERROR("Embedding size should be at least 1");
                 return kResultInvalidState;
             }
+
+#if GGML_USE_CUBLAS
+            // We ask llama for all the cuda_streams it is going to use and 
+            // store them to enable us to change their priorities dynamically
+            size_t stream_count = llama_get_cuda_stream_count(instanceData->llama_init.context.get());
+            instanceData->cuda_streams.resize(stream_count);
+            llama_get_cuda_streams(instanceData->llama_init.context.get(), (void**)instanceData->cuda_streams.data(), stream_count);
+
+
+            if (ctx.icig->getVersion() >= 2)
+            {
+                // Apply the global priority to all streams
+                nvigi::Result cuerr = ctx.icig->cudaApplyGlobalGpuInferenceSchedulingMode(instanceData->cuda_streams.data(), instanceData->cuda_streams.size());
+                if (cuerr != kResultOk)
+                {
+                    NVIGI_LOG_WARN("Could not set relative priority of compute and graphics. Please use 575 driver or higher\n");
+                }
+            }
+#endif
+
         }
 
 #if GGML_USE_CUBLAS
@@ -444,6 +490,10 @@ nvigi::Result ggmlGetCapsAndRequirements(nvigi::NVIGIParameter** _info, const nv
 
 nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx)
 {
+#if GGML_USE_CUBLAS
+    nvtxRangePushA("ggmlEvaluate");
+#endif
+
     auto& ctx = (*embed::getContext());
 
     // Validate all inputs first
@@ -471,11 +521,25 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx)
         NVIGI_LOG_ERROR("Invalid inference instance - expecting Embed %u got %u", ctx.feature, execCtx->instance->getFeatureId(execCtx->instance->data));
         return kResultInvalidParameter;
     }
-
+    
     // Now we are good to go!
     using namespace nvigi::embed;
 
     auto instance = (nvigi::embed::InferenceContext*)(execCtx->instance->data);
+
+#if GGML_USE_CUBLAS
+    // We apply the global scheduling mode to our streams at every evaluate() 
+    // to reflect any changes the user made to the global mode between calls
+
+    if (ctx.icig->getVersion() >= 2)
+    {
+        nvigi::Result err = ctx.icig->cudaApplyGlobalGpuInferenceSchedulingMode(instance->cuda_streams.data(), instance->cuda_streams.size());
+        if (err != kResultOk)
+        {
+            NVIGI_LOG_WARN_ONCE("Could not set relative priority of compute and graphics, insufficient driver\n");
+        }
+    }
+#endif
 
     nvigi::RuntimeContextScope scope(*instance);
 
@@ -498,6 +562,10 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx)
     res = kResultOk;
     if (ggmlReturnOutputEmbedding(execCtx, embedding) != nvigi::kInferenceExecutionStateDone)
         res = kResultInvalidState;
+
+#if GGML_USE_CUBLAS
+    nvtxRangePop();
+#endif
     return res;
 #else
     return kResultMissingInterface;
@@ -565,6 +633,14 @@ Result nvigiPluginRegister(framework::IFramework* framework)
 
     ctx.feature = embed::getFeatureId(nullptr);
 
+#if GGML_USE_CUBLAS
+    if (!framework::getInterface(plugin::getContext()->framework, plugin::hwi::cuda::kId, &ctx.icig))
+    {
+        NVIGI_LOG_ERROR("Missing interface from 'nvigi.plugin.hwi.cuda'");
+        return kResultInvalidState;
+    }
+#endif
+
     ctx.api.createInstance = embed::createInstance;
     ctx.api.destroyInstance = embed::destroyInstance;
     ctx.api.getCapsAndRequirements = embed::getCapsAndRequirements;
@@ -594,6 +670,11 @@ Result nvigiPluginDeregister()
         delete ctx.worker;
         ctx.worker = {};
     }
+
+#if GGML_USE_CUBLAS
+    framework::releaseInterface(plugin::getContext()->framework, plugin::hwi::cuda::kId, ctx.icig);
+    ctx.icig = nullptr;
+#endif
 
     // call this to flush any threads waiting to write to disk
     common_log_pause(common_log_main());

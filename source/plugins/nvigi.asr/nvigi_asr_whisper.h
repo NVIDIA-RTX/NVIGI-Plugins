@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 
@@ -14,6 +14,14 @@ constexpr PluginID kId = {{0x731fdb34, 0x8c5b, 0x4bd5,{0xb6, 0xd0, 0x09, 0xad, 0
 namespace plugin::asr::ggml::cpu
 {
 constexpr PluginID kId = {{0x2654567f, 0x2cf4, 0x4e4e,{0x95, 0x45, 0x5d, 0xa8, 0x39, 0x69, 0x5c, 0x43}}, 0x87c5d4};  // {2654567F-2CF4-4E4E-9545-5DA839695C43} [nvigi.plugin.asr.ggml.cpu]
+}
+namespace plugin::asr::ggml::vulkan
+{
+constexpr PluginID kId = { {0xe604e2bb, 0xe08d, 0x4573,{0x9d, 0xdd, 0x81, 0xe1, 0xb0, 0x10, 0x66, 0x61}}, 0x70731d }; //{E604E2BB-E08D-4573-9DDD-81E1B0106661} [nvigi.plugin.asr.ggml.vulkan]
+}
+namespace plugin::asr::ggml::d3d12
+{
+constexpr PluginID kId = { {0x65dbd120, 0x3a70, 0x45c9,{0x80, 0x8b, 0x80, 0x99, 0xa2, 0x46, 0xba, 0x0d}}, 0xe4faf }; //{65DBD120-3A70-45C9-808B-8099A246BA0D} [nvigi.plugin.asr.ggml.d3d12]
 }
 
 

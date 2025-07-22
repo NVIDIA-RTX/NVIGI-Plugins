@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 
@@ -45,6 +45,11 @@
 #include "external/json/source/nlohmann/json.hpp"
 #include <ctime>
 
+#ifdef GGML_USE_CUBLAS
+#include "source/core/nvigi.api/nvigi_cuda.h"
+#include "ggml-cuda.h"
+#endif
+
 using json = nlohmann::json;
 //! Unfortunately GGML gpt_params structure requires this method so reimplementing
 int32_t get_num_physical_cores()
@@ -57,6 +62,31 @@ namespace nvigi
 {
 	namespace embed
 	{
+		// Begin NVIDIA Modification
+		// Memory callbacks
+#ifdef GGML_USE_CUBLAS
+		void setCudaMallocReportCallback(PFun_nvigiCudaReportCallback callback, void* userContext)
+		{
+			ggml_backend_cuda_set_malloc_report_callback(callback, userContext);
+		}
+
+		void setCudaFreeReportCallback(PFun_nvigiCudaReportCallback callback, void* userContext)
+		{
+			ggml_backend_cuda_set_free_report_callback(callback, userContext);
+		}
+
+		void setCudaMallocCallback(PFun_nvigiCudaMallocCallback callback, void* userContext)
+		{
+			ggml_backend_cuda_set_malloc_callback(callback, userContext);
+		}
+
+		void setCudaFreeCallback(PFun_nvigiCudaFreeCallback callback, void* userContext)
+		{
+			ggml_backend_cuda_set_free_callback(callback, userContext);
+		}
+#endif // GGML_USE_CUBLAS
+		// End NVIDIA Modification
+
 		// Begin NVIDIA Modification
 		// NVidia custom functions to sanitize input data.
 
@@ -110,7 +140,7 @@ namespace nvigi
 			const struct llama_model* model = llama_get_model(ctx);
 
 			// clear previous kv_cache values (irrelevant for embeddings)
-			llama_kv_cache_clear(ctx);
+			llama_kv_self_clear(ctx);
 
 			// run model
 			LOG_INF("%s: n_tokens = %d, n_seq = %d\n", __func__, batch.n_tokens, n_seq);

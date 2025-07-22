@@ -1,0 +1,35 @@
+if os.istarget("windows") then
+
+group "samples"
+
+project "nvigi.reload"
+	kind "ConsoleApp"
+	targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
+	objdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
+	
+	dependson {"gitVersion"}
+
+	--floatingpoint "Fast"
+
+	files {
+		"./**.h",
+		"./**.cpp",
+		"./**.rc",
+		coresdkdir .. "source/utils/**.h",
+	}
+
+	includedirs {coresdkdir .. "source/core/nvigi.api", coresdkdir .. "source/utils/nvigi.ai"}
+	-- allows the sample to compile using include directives that match a packaged SDK
+	includedirs {
+		ROOT .. "source/plugins/nvigi.gpt"
+	}
+	filter {"system:windows"}
+		vpaths { ["impl"] = {"./**.h","./**.cpp", }}
+		vpaths { ["utils"] = {ROOT .. "source/utils/**.h",ROOT .. "source/utils/**.cpp", }}
+		links { "WS2_32.lib", "d3d12.lib", "dxgi.lib", "dxguid.lib" }
+	filter {"system:linux"}
+	filter {}
+
+group ""
+
+end

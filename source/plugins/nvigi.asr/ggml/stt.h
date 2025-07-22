@@ -1,10 +1,15 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 
 #pragma once
 
 #define SDL_MAIN_HANDLED 
+
+#ifdef GGML_USE_CUBLAS
+#include "source/core/nvigi.api/nvigi_cuda.h"
+#include "ggml-cuda.h"
+#endif
 
 #include <inttypes.h>
 #include <string>
@@ -23,6 +28,28 @@ namespace nvigi
 {
 namespace asr
 {
+
+#ifdef GGML_USE_CUBLAS
+void setCudaMallocReportCallback(PFun_nvigiCudaReportCallback callback, void* userContext)
+{
+    ggml_backend_cuda_set_malloc_report_callback(callback, userContext);
+}
+
+void setCudaFreeReportCallback(PFun_nvigiCudaReportCallback callback, void* userContext)
+{
+    ggml_backend_cuda_set_free_report_callback(callback, userContext);
+}
+
+void setCudaMallocCallback(PFun_nvigiCudaMallocCallback callback, void* userContext)
+{
+    ggml_backend_cuda_set_malloc_callback(callback, userContext);
+}
+
+void setCudaFreeCallback(PFun_nvigiCudaFreeCallback callback, void* userContext)
+{
+    ggml_backend_cuda_set_free_callback(callback, userContext);
+}
+#endif // GGML_USE_CUBLAS
 
 struct whisper_params {
     int32_t n_threads = std::min(4, (int32_t)std::thread::hardware_concurrency());

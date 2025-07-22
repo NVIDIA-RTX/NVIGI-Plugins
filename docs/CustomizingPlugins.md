@@ -26,7 +26,7 @@ In the following instructions, we follow the directory setup described [here](ht
 
   * Duplicate the folder containing the source code of the original plugin (`<SDK_PLUGINS>/source/plugins/nvigi.gpt`) and rename it to `<SDK_PLUGINS>/source/plugins/nvigi.mygpt`.
 
-  * (Optional) Enter the new source folder and remove unused backend code (e.g., `onnxgenai` and `rest`).
+  * (Optional) Enter the new source folder and remove unused backend code (e.g. `rest`).
 
   * (Optional) Rename the source files with your new plugin name by replacing `gpt` with `mygpt`.
 
@@ -41,7 +41,7 @@ In the following instructions, we follow the directory setup described [here](ht
     |   |   |-- mygpt.cpp
     |   |   |-- ... // Other source files
     |   |-- nvigi_mygpt.h
-    |   |-- // "onnxgenai" and "rest" are removed
+    |   |-- // "rest" is removed
     |-- ... // Other plugins
     ```
 

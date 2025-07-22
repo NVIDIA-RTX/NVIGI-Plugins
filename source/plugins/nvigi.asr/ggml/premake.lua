@@ -63,6 +63,66 @@ project "nvigi.plugin.asr.ggml.cuda"
 
 	add_cuda_dependencies()
 
+project "nvigi.plugin.asr.ggml.vk"
+	kind "SharedLib"
+	filter{}
+
+	targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
+	objdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
+	
+	pluginBasicSetup("asr/ggml")
+		
+	defines {
+		"GGML_USE_VULKAN=1",
+		"K_QUANTS_PER_ITERATION=2",
+		"GGML_USE_K_QUANTS",		
+    }
+
+	vectorextensions "AVX2"
+	
+	files {
+		"../*.h",
+		"./*.h",
+		"./*.cpp",
+		externaldir .."whisper.cpp/include/**.h"
+	}
+	
+	includedirs {
+		externaldir .."whisper.cpp/include", 
+		externaldir .."whisper.cpp/ggml/include", 
+		coresdkdir .. "source/utils/nvigi.ai", 
+		ROOT .. "source/plugins/nvigi.asr/ggml/external",
+		externaldir .. "vulkanSDK/include"
+	}
+
+	-- some 3rd party libs (ggml) do not compile without it in production mode when security flags are set
+	filter {"system:windows","configurations:Production"}
+			defines {"_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS"} 
+	filter{}
+
+	libdirs {externaldir .."vulkanSDK/Lib"}
+
+	filter {"system:windows"}
+		vpaths { ["impl"] = {"../*.h", "./*.h", "./*.cpp" }}
+		vpaths { ["ggml"] = {
+			externaldir .."whisper.cpp/include/**.h"
+		}}
+		
+
+		links {"whisper","ggml", "ggml-base","ggml-cpu","ggml-vulkan", "winmm", "vulkan-1"}
+	
+		filter {"configurations:Debug"}
+			libdirs {externaldir .."whisper.cpp/vk/lib/Debug"}
+		filter {"configurations:not Debug"}
+			libdirs {externaldir .."whisper.cpp/vk/lib/NotDebug"}
+	
+	filter {"system:linux"}
+		libdirs {externaldir .."whisper.cpp/vk/lib64"}
+		libdirs {externaldir .."vulkanSDK/lib/"}
+		linkoptions {"-fopenmp"}
+		links {"whisper", "common", "ggml", "ggml-cpu","ggml-base","ggml-vulkan","vulkan","dl", "pthread", "rt"}
+	filter {}
+
 group ""
 
 if os.istarget("windows") then
@@ -113,4 +173,6 @@ project "nvigi.plugin.asr.ggml.cpu"
 		links {"ggml-base","ggml-cpu", "whisper","ggml", "dl", "pthread", "rt"}
 	filter {}
 
+
+group ""
 end

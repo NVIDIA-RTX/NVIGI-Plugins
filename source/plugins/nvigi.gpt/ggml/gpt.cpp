@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 
@@ -30,6 +30,32 @@
 #include <cuda_runtime.h>
 
 #include "nvtx3/nvToolsExt.h"
+#elif defined(GGML_USE_D3D12)
+#include "external/agility-sdk/build/native/include/d3d12.h"
+#include "source/core/nvigi.api/nvigi_d3d12.h"
+#include "source/plugins/nvigi.hwi/d3d12/nvigi_hwi_d3d12.h"
+#include "source/utils/nvigi.d3d12/d3d12_helpers.h"
+#if PROFILE_D3D
+#include "nvtx3/nvToolsExt.h"
+#endif
+namespace nvigi {
+    // this should match the PFun_commandListAction defined in LlamaCPP - redefining as it's at a depth/scope in LlamaCPP not exposed to IGI
+    using PFun_commandListAction = void(ID3D12CommandList* pCommandList, int action);
+}
+extern void ggml_d3d12_set_params(ID3D12Device* device, ID3D12CommandQueue* cmd_queue_direct,
+    ID3D12CommandQueue* cmd_queue_compute, ID3D12CommandQueue* cmd_queue_copy,
+    nvigi::PFun_createCommittedResource* createCommittedResource, nvigi::PFun_destroyResource* destroyResource,
+    void* userContextCreate, void* userContextDestroy, bool allowReBAR, nvigi::PFun_commandListAction* commandListAction);
+#elif defined GGML_USE_VULKAN
+#include "external/vulkanSDK/include/vulkan/vulkan.h"
+#include "source/core/nvigi.api/nvigi_vulkan.h"
+extern void ggml_set_vk_params(VkPhysicalDevice physicalDevice, VkDevice device, VkQueue cmd_queue_direct, VkQueue cmd_queue_compute, VkQueue cmd_queue_copy,
+    nvigi::PFun_allocateMemoryCallback* allocateMemory, nvigi::PFun_freeMemoryCallback* freeMemory,
+    void* userContextAlloc, void* userContextFree);
+#endif
+
+#if defined GGML_USE_VULKAN || defined(GGML_USE_D3D12)
+extern void ggml_vk_backend_free();
 #endif
 
 namespace nvigi
@@ -37,25 +63,36 @@ namespace nvigi
 namespace gpt
 {
 
+uint32_t replace_all(std::string& str, const std::string& search_str, const std::string& replace_str);
+
 static void llamaLogCallback(ggml_log_level level, const char* text, void* user_data)
 {
     //! Special case, llama prints progress bars with a stream of consecutive "." so we want to ignore that
     if (strcmp(text, ".") == 0) return;
 
+    std::string msg(text);
+#if defined(GGML_USE_D3D12)
+    // Running Vulkan on DX12 but ggml is unaware, replace Vulkan with D3D12 to avoid confusion
+    replace_all(msg, "Vulkan0", "D3D12(0)");
+    replace_all(msg, "Vulkan1", "D3D12(1)");
+    replace_all(msg, "vulkan", "d3d12");
+    replace_all(msg, "Vulkan", "D3D12");
+#endif
     if (level == GGML_LOG_LEVEL_WARN)
     {
-        NVIGI_LOG("llama", LogType::eWarn, nvigi::log::YELLOW, "%s", text);
+        NVIGI_LOG("llama", LogType::eWarn, nvigi::log::YELLOW, "%s", msg.c_str());
     }
     else if (level == GGML_LOG_LEVEL_ERROR)
     {
-        NVIGI_LOG("llama", LogType::eError, nvigi::log::RED, "%s", text);
+        NVIGI_LOG("llama", LogType::eError, nvigi::log::RED, "%s", msg.c_str());
     }
     else
     {
-        NVIGI_LOG("llama", LogType::eInfo, nvigi::log::WHITE, "%s", text);
+        NVIGI_LOG("llama", LogType::eInfo, nvigi::log::WHITE, "%s", msg.c_str());
     }
 }
 
+// BEGIN VLM Addition
 static bool replace_first(std::string& str, const std::string& search_str, const std::string& replace_str)
 {
     size_t start_pos = str.find(search_str);
@@ -68,7 +105,7 @@ static bool replace_first(std::string& str, const std::string& search_str, const
     return false;
 }
 
-static uint32_t replace_all(std::string& str, const std::string& search_str, const std::string& replace_str)
+uint32_t replace_all(std::string& str, const std::string& search_str, const std::string& replace_str)
 {
     uint32_t num_replaced = 0;
     size_t start_pos = str.find(search_str);
@@ -82,12 +119,24 @@ static uint32_t replace_all(std::string& str, const std::string& search_str, con
 
     return num_replaced;
 }
+// End VLM Addition
+
+ggml_type to_ggml_cache_type(int32_t type)
+{
+    if (type < 0 || type >= GGML_TYPE_COUNT)
+    {
+        NVIGI_LOG_WARN("Invalid cache type [%d] provided, using default GGML_TYPE_F16", type);
+        return GGML_TYPE_F16; // default
+    }
+    return (ggml_type)type;
+}
 
 struct InferenceContext
 {
     InferenceContext(const nvigi::NVIGIParameter* params) : cudaContext(params) {}
 
     common_params params{};
+    int32_t instanceBatchSize = 2048;
 
     InferenceContextSync sync{};
 
@@ -101,6 +150,11 @@ struct InferenceContext
 #if GGML_USE_CUBLAS
     // Used to set the relative priority of GPU inference and graphics
     std::vector<cudaStream_t> cuda_streams;
+#endif
+
+#ifdef GGML_USE_D3D12
+    // Used to set the relative priority of GPU inference and graphics
+    ID3D12Device* device{};
 #endif
 
 #if GGML_USE_CUBLAS
@@ -123,9 +177,45 @@ PluginID getFeatureId(InferenceInstanceData* data)
 {
 #ifdef GGML_USE_CUBLAS
     return plugin::gpt::ggml::cuda::kId;
+#elif defined GGML_USE_VULKAN
+    return plugin::gpt::ggml::vulkan::kId;
+#elif defined(GGML_USE_D3D12)
+    return plugin::gpt::ggml::d3d12::kId;
 #else
     return plugin::gpt::ggml::cpu::kId;
 #endif
+}
+
+
+void igiProcessChatTemplate(bool shouldProcessChatTemplate, nvigi::gpt::InferenceContext* instance, const std::string& system, const std::string& user, const std::string& assistant)
+{
+    if (shouldProcessChatTemplate)
+    {
+        // user wants us to process it - so we need to determine if we have IGI of LlamaCPP do it.
+        bool igiShouldProcessChatTemplate = (instance->modelInfo.contains(nvigi::ai::kPromptTemplate)) && (instance->modelInfo.contains(nvigi::ai::kTurnTemplate));
+        if (igiShouldProcessChatTemplate)
+        {
+            // igi will do it from the config.json prompt_template and turn_template values.
+            instance->params.prompt = ai::generatePrompt(instance->modelInfo, system, user, assistant);
+            instance->params.enable_chat_template = false;
+        }
+        else
+        {
+            // llamacpp will handle it inside gpt.h generate
+            instance->params.prompt = system;
+            instance->params.prompt += user;
+            instance->params.enable_chat_template = true;
+        }
+    }
+    else
+    {
+        // in this case, the system is sort of operating in "raw" mode, so it's up to the user to properly space things if they decide
+        // to send in both a system and a user string in "raw" mode.  It's generally advisable to send in one or the other and simply parameterize them appropriately.
+        // assumption here is that if the user has _not_ passed one of the two in, that entry will be an empty string, so a no-op below.
+        // This does get the user as close to the metal as possible to test for problems in a way they can control.
+        instance->params.prompt = system;
+        instance->params.prompt += user;
+    }
 }
 
 const nvigi::InferenceDataDescriptorArray* getInputSignature(InferenceInstanceData* data)
@@ -165,6 +255,9 @@ struct GPTContext
 
 #ifdef GGML_USE_CUBLAS
     nvigi::IHWICuda* icig{};
+#elif defined(GGML_USE_D3D12)
+    nvigi::IHWID3D12* iscg{};
+    nvigi::system::ISystem* isystem{};
 #endif
 };
 
@@ -211,16 +304,20 @@ nvigi::Result ggmlDestroyInstance(const nvigi::InferenceInstance* instance)
 #ifdef GGML_USE_CUBLAS
             nvigi::RuntimeContextScope scope(*gptInstance);
 #endif
-			if (gptInstance->clipContext != nullptr)
+            // Begin VLM Addition
+            if (gptInstance->clipContext != nullptr)
             {
                 clip_free(gptInstance->clipContext);
                 gptInstance->clipContext = nullptr;
             }
+            // End VLM Addition
+
             gptInstance->llamaContext.model.reset();
             gptInstance->llamaContext.context.reset();
             gptInstance->llamaContext.lora.clear();
         }
 
+        delete gptInstance->sync.tgLimiter;
         delete gptInstance;
         delete instance;
     }
@@ -230,10 +327,9 @@ nvigi::Result ggmlDestroyInstance(const nvigi::InferenceInstance* instance)
 nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::InferenceInstance** _instance)
 {
     auto common = findStruct<CommonCreationParameters>(_params);
-    auto paramsGPT = findStruct<GPTCreationParameters>(_params);
-    if (!common || !paramsGPT) return nvigi::kResultInvalidParameter;
-    auto& params = *paramsGPT;
-
+    auto creationParams = findStruct<GPTCreationParameters>(_params);
+    if (!common || !creationParams) return nvigi::kResultInvalidParameter;
+    
     if (!_instance || !common->utf8PathToModels || !common->modelGUID) return nvigi::kResultInvalidParameter;
 
     if (!ai::isGuid(common->modelGUID))
@@ -266,7 +362,7 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
 
     using namespace nvigi::gpt;
 
-#if defined(GGML_USE_CUBLAS)
+#if defined(GGML_USE_CUBLAS) || defined(GGML_USE_VULKAN) || defined(GGML_USE_D3D12)
 #ifndef NVIGI_PRODUCTION
     size_t currentUsageMB{};
     extra::ScopedTasks vram(
@@ -283,15 +379,18 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
             NVIGI_LOG_INFO("New instance vram : %lluMB [budget : %lluMB, total : %lluMB] - n_layers : %d", currentUsageMB, common->vramBudgetMB, usage->budgetMB, n_layers);
         }
     );
+#endif     
+#else
+    instanceData->params.n_gpu_layers = 0;
 #endif
 
+#if defined(GGML_USE_CUBLAS)
     if (common->numThreads > 1)
     {
         NVIGI_LOG_WARN("For optimal performance when using CUDA only one CPU thread is used");
-}
+    }
     instanceData->params.cpuparams.n_threads = 1;
 #else
-    instanceData->params.n_gpu_layers = 0;
     instanceData->params.cpuparams.n_threads = common->numThreads;
 #endif
 
@@ -338,8 +437,27 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
     }
 
     {
-        instanceData->params.n_ctx = params.contextSize;
-        instanceData->params.n_predict = params.maxNumTokensToPredict;
+        instanceData->params.sampling.seed = creationParams->seed;
+        instanceData->params.n_ctx = creationParams->contextSize;
+        instanceData->params.n_predict = creationParams->maxNumTokensToPredict;
+        if (creationParams->getVersion() >= 2)
+        {
+            instanceData->params.n_batch = creationParams->batchSize;
+            instanceData->params.n_ubatch = creationParams->physicalBatchSize;
+#if defined(GGML_USE_D3D12)
+            if (instanceData->params.flash_attn)
+            {
+                NVIGI_LOG_WARN("Flash attention is not supported with D3D12 backend");
+                instanceData->params.flash_attn = false; // not supported
+            }
+#else
+            instanceData->params.flash_attn = creationParams->flashAttention;
+            instanceData->params.cache_type_k = to_ggml_cache_type(creationParams->cacheTypeK);
+            instanceData->params.cache_type_v = to_ggml_cache_type(creationParams->cacheTypeV);
+#endif
+        }
+        // Store for later so we can make sure it is not increased
+        instanceData->instanceBatchSize = instanceData->params.n_batch;
 
         instanceData->modelInfo.clear();
         if (!ai::findModels(common, { "gguf" }, instanceData->modelInfo))
@@ -355,7 +473,7 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
             // Trim down to our GUID for this instance
             instanceData->modelInfo = instanceData->modelInfo[common->modelGUID];
             n_layers = instanceData->modelInfo["n_layers"];
-#if defined(GGML_USE_CUBLAS)
+#if defined(GGML_USE_CUBLAS) || defined(GGML_USE_VULKAN) || defined(GGML_USE_D3D12)
             // Allow offloading to CPU as needed
             neededVRAM = instanceData->modelInfo["vram"];            
             auto gpuRatio = std::min(1.0, static_cast<double>(common->vramBudgetMB) / static_cast<double>(neededVRAM));
@@ -367,7 +485,8 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
                 NVIGI_LOG_ERROR("Failed to find model in the expected directory '%s'", common->utf8PathToModels);
                 return kResultInvalidParameter;
             }
-            instanceData->params.model = files[0];
+            instanceData->params.model.path = files[0];
+            // Begin VLM Addition
             if (instanceData->modelInfo.contains("weights") &&
                 instanceData->modelInfo.contains("mmproj_weights"))
             {
@@ -382,11 +501,12 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
                 for (auto const& model_file : files)
                 {
                     if (ends_with(model_file, weights_suffix))
-                        instanceData->params.model = model_file;
+                        instanceData->params.model.path = model_file;
                     if (ends_with(model_file, mmproj_model_suffix))
-                        instanceData->params.mmproj = model_file;
+                        instanceData->params.mmproj.path = model_file;
                 }
             }
+            // End VLM Addition
         }
         catch (std::exception& e)
         {
@@ -394,9 +514,23 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
             return kResultInvalidState;
         }
 
-        NVIGI_LOG_INFO("Loading model '%s'", instanceData->params.model.c_str());
+        NVIGI_LOG_INFO("Loading model '%s'", instanceData->params.model.path.c_str());
 #if GGML_USE_CUBLAS
         auto platform = "ggml.cuda";
+#elif defined GGML_USE_VULKAN
+        auto platform = "ggml.vulkan";
+#elif defined(GGML_USE_D3D12)
+        auto platform = "ggml.d3d12";
+        bool allow_batch_size_change = false;
+        if (instanceData->modelInfo.contains("allow_batch_size_change"))
+        {
+            allow_batch_size_change = instanceData->modelInfo["allow_batch_size_change"];
+        }
+        if (!allow_batch_size_change)
+        {
+            // We cannot have more than 8 batches in D3D12 for certain models, so we limit it here
+            instanceData->params.n_batch = std::min(8, instanceData->params.n_batch);
+        }
 #else
         auto platform = "ggml.cpu";
 #endif
@@ -409,19 +543,115 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
         NVIGI_LOG_VERBOSE("# predicting %d", instanceData->params.n_predict);
         NVIGI_LOG_VERBOSE("# batch %d", instanceData->params.n_batch);
 
+#ifdef GGML_USE_VULKAN
+        auto vkParams = findStruct<VulkanParameters>(_params);
+        if (vkParams)
+        {
+            // Unlike D3D12 no validation possible with VK, we just assume that devs are passing correct bits
+            ggml_set_vk_params(vkParams->physicalDevice, vkParams->device, vkParams->queue, vkParams->queueCompute, vkParams->queueTransfer,
+                vkParams->allocateMemoryCallback, vkParams->freeMemoryCallback,
+                vkParams->allocateMemoryCallbackUserContext, vkParams->freeMemoryCallbackUserContext);
+        }
+#elif defined(GGML_USE_D3D12)
+        auto d3d12Params = findStruct<D3D12Parameters>(_params);
+        if(NVIGI_FAILED(res, d3d12::validateParameters(d3d12Params)))
+        {
+            return res;
+        }
+
+        VendorId vendor{};
+        if (NVIGI_FAILED(res, d3d12::getDeviceVendor(d3d12Params, ctx.isystem, vendor)))
+        {
+            return res;
+        }
+        if (vendor == VendorId::eNVDA)
+        {
+            if (!ctx.iscg && !framework::getInterface(plugin::getContext()->framework, plugin::hwi::d3d12::kId, &ctx.iscg))
+            {
+                NVIGI_LOG_ERROR("Missing interface from 'nvigi.plugin.hwi.d3d12'");
+                return kResultInvalidState;
+            }
+
+            if (NVIGI_FAILED(res, d3d12::applyNVDASpecificSettings(d3d12Params, ctx.iscg)))
+            {
+                return res;
+            }
+        }
+
+        auto applySchedulingModeCallback = [](ID3D12CommandList* pCommandList, int action)
+        {
+            // Don't check iscg and version every call, because we do it once when callback is registered
+            IHWID3D12* iscg = gpt::getContext()->iscg;
+            ID3D12GraphicsCommandList* pGraphicsCommandList = nullptr;
+            if (SUCCEEDED(pCommandList->QueryInterface<ID3D12GraphicsCommandList>(&pGraphicsCommandList)))
+            {
+                iscg->d3d12ApplyGlobalGpuInferenceSchedulingModeToCommandList(pGraphicsCommandList);
+            }
+        };
+
+        // Do iscg and version checks now to avoid doing them inside every callback       
+        PFun_commandListAction* CLresetCallback = nullptr;
+        IHWID3D12* iscg = gpt::getContext()->iscg;
+        if (iscg)
+        {
+            if (iscg->getVersion() >= 4)
+            {
+                CLresetCallback = applySchedulingModeCallback;
+            }
+            else
+            {
+                NVIGI_LOG_WARN_ONCE("We need version 4 of hwi.d3d12 in order to set D3D12 compute scheduling mode, and version available is %d. Performance may be suboptimal.\n", iscg->getVersion());
+            }
+        }
+        else
+        {
+            NVIGI_LOG_WARN_ONCE("hwi.d3d12 was not loaded, so couldn't set D3D12 compute scheduling mode. Performance may be suboptimal.\n");
+        }
+
+        bool allowReBAR = d3d12Params->getVersion() < 3 || !(d3d12Params->flags & nvigi::D3D12ParametersFlags::eDisableReBAR);
+        ggml_d3d12_set_params(
+            d3d12Params->device, 
+            d3d12Params->queue, 
+            d3d12Params->queueCompute, 
+            d3d12Params->queueCopy,
+            d3d12Params->createCommittedResourceCallback, 
+            d3d12Params->destroyResourceCallback, 
+            d3d12Params->createCommitResourceUserContext, 
+            d3d12Params->destroyResourceUserContext, 
+            allowReBAR,
+            CLresetCallback);
+#endif
         {
 #ifdef GGML_USE_CUBLAS
             nvigi::RuntimeContextScope scope(*instanceData);
 #endif
-            if (!ctx.initialized)
+            try
             {
-                llama_backend_init();
-                llama_numa_init(instanceData->params.numa);
-                ctx.initialized = true;
+                if (!ctx.initialized)
+                {
+                    // NOTE: Each instance can potentially change device, queue etc but llama.cpp has not backend free function.
+                    // 
+                    // As a result, we cannot have instances with different devices or queues due to llama.cpp limitations
+                    llama_backend_init();
+                    llama_numa_init(instanceData->params.numa);
+                    ctx.initialized = true;
+                }
+
+                instanceData->llamaContext = common_init_from_params(instanceData->params);
+            }
+            catch (std::exception& e)
+            {
+                NVIGI_LOG_ERROR("%s", e.what());
+                delete instanceData;
+                return kResultInvalidState;
+            }
+            
+            if (!instanceData->llamaContext.model)
+            {
+                delete instanceData;
+                return kResultInvalidState;
             }
 
-            instanceData->llamaContext = common_init_from_params(instanceData->params);
-            
 #if GGML_USE_CUBLAS
             // We ask llama for all the cuda_streams it is going to use and 
             // store them to enable us to change their priorities dynamically
@@ -430,28 +660,28 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
             llama_get_cuda_streams(instanceData->llamaContext.context.get(), (void**)instanceData->cuda_streams.data(), stream_count);
 
 
-            if (ctx.icig->getVersion() >= 2)
+            if (instanceData->cudaContext.usingCiG && ctx.icig->getVersion() >= 2)
             {
                 // Apply the global priority to all streams
                 nvigi::Result cuerr = ctx.icig->cudaApplyGlobalGpuInferenceSchedulingMode(instanceData->cuda_streams.data(), instanceData->cuda_streams.size());
                 if (cuerr != kResultOk)
                 {
-                    NVIGI_LOG_WARN("Could not set relative priority of compute and graphics. Please use 575 driver or higher\n");
+                    NVIGI_LOG_WARN_ONCE("Could not set relative priority of CUDA compute and graphics. Please use 575 driver or higher\n");
                 }
             }
 #endif
-
-            if (!instanceData->params.mmproj.empty())
+            // Begin VLM Addition
+            if (!instanceData->params.mmproj.path.empty())
             {
-                const char* clip_path = instanceData->params.mmproj.c_str();
+                const char* clip_path = instanceData->params.mmproj.path.c_str();
+#ifdef NVIGI_DEBUG
                 instanceData->clipContext = clip_model_load(clip_path, /*verbosity=*/ 1);
+#else
+                instanceData->clipContext = clip_model_load(clip_path, /*verbosity=*/ 0);
+#endif 
             }
+            // Begin VLM Addition
 
-            if (!instanceData->llamaContext.model)
-            {
-                delete instanceData;
-                return kResultInvalidState;
-            }
             // At this point we are OK
             instanceData->state.store(nvigi::kResultOk);
         }
@@ -494,7 +724,7 @@ nvigi::Result ggmlGetCapsAndRequirements(nvigi::NVIGIParameter** _info, const nv
     }
     
 
-#if defined(GGML_USE_CUBLAS)
+#if defined(GGML_USE_CUBLAS) || defined(GGML_USE_VULKAN) || defined(GGML_USE_D3D12)
     info->supportedBackends = nvigi::InferenceBackendLocations::eGPU;
 #else
     info->supportedBackends = nvigi::InferenceBackendLocations::eCPU;
@@ -508,7 +738,7 @@ nvigi::Result ggmlGetCapsAndRequirements(nvigi::NVIGIParameter** _info, const nv
 
 nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async)
 {
-#if GGML_USE_CUBLAS
+#if GGML_USE_CUBLAS || (defined(GGML_USE_D3D12) && PROFILE_D3D)
     nvtxRangePushA("ggmlEvaluate");
 #endif
 
@@ -594,7 +824,7 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
     // We apply the global scheduling mode to our streams at every evaluate() 
     // to reflect any changes the user made to the global mode between calls
 
-    if (ctx.icig->getVersion() >= 2)
+    if (instance->cudaContext.usingCiG && ctx.icig->getVersion() >= 2)
     {
         nvigi::Result err = ctx.icig->cudaApplyGlobalGpuInferenceSchedulingMode(instance->cuda_streams.data(), instance->cuda_streams.size());
         if (err != kResultOk)
@@ -618,10 +848,18 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
         return kResultInvalidParameter;
     }
 
+    bool shouldProcessChatTemplate = true;
+
     // Optional
     auto runtime = findStruct<GPTRuntimeParameters>(execCtx->runtimeParameters);
     if (runtime)
     {
+        if (runtime->batchSize > instance->instanceBatchSize)
+        {
+            NVIGI_LOG_ERROR("Batch size cannot be increased after instance creation");
+            return kResultInvalidParameter;
+        }
+
         // Make sure async job is not running when we modify parameters
         std::lock_guard<std::mutex> lock(instance->sync.mtx);
 
@@ -654,6 +892,33 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
         }
         instance->params.input_prefix = runtime->prefix ? runtime->prefix : "";
         instance->params.input_suffix = runtime->suffix ? runtime->suffix : "";
+
+#ifdef GGML_USE_D3D12
+        bool allow_batch_size_change = false;
+        if (instance->modelInfo.contains("allow_batch_size_change"))
+        {
+            allow_batch_size_change = instance->modelInfo["allow_batch_size_change"];
+        }
+        if (!allow_batch_size_change)
+        {
+            // We cannot have more than 8 batches in D3D12 for certain models so we limit it here
+            instance->params.n_batch = std::min(8, instance->params.n_batch);
+        }
+#endif
+        if (runtime->getVersion() >= 2 && runtime->targetTokensPerSecond > 0 && runtime->frameTimeMs > 0)
+        {
+            if (!instance->sync.tgLimiter)
+            {
+                instance->sync.tgLimiter = new TokenGenLimiter();
+            }
+            instance->sync.tgLimiter->update(1000.0f / std::max(0.01f, runtime->frameTimeMs), runtime->targetTokensPerSecond);
+        }
+
+        if (runtime->getVersion() >= 3)
+        {
+            if (runtime->promptPretemplatized)
+                shouldProcessChatTemplate = false;
+        }
     }
 
     // Optional
@@ -696,6 +961,7 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
     std::string user = userSlot ? userSlot->getUTF8Text() : "";
     std::string assistant = assistantSlot ? assistantSlot->getUTF8Text() : "";
 
+    // Begin VLM Addition
     const unsigned char* rgb_data = nullptr;
     int rgb_width = 0;
     int rgb_height = 0;
@@ -756,6 +1022,7 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
             }
         }
     }
+    // End VLM Addition
 
     if (instance->params.interactive)
     {
@@ -779,16 +1046,18 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
 #ifdef GGML_USE_CUBLAS
                     nvigi::RuntimeContextScope scope(*instance);
 #endif
-                    llama_kv_cache_clear(instance->llamaContext.context.get());
+                    llama_kv_self_clear(instance->llamaContext.context.get());
                 }
 
                 // Prepare prompt based on model's template
-                instance->params.prompt = ai::generatePrompt(instance->modelInfo, system, user, assistant);
+                igiProcessChatTemplate(shouldProcessChatTemplate, instance, system, user, assistant);
                 instance->sync.runningWithMutexLockedPromise = std::promise<void>();
                 instance->sync.silenceOutput.store(false);
+                // Begin VLM Addition
                 instance->sync.rgb_data = rgb_data;
                 instance->sync.rgb_width = rgb_width;
                 instance->sync.rgb_height = rgb_height;
+                // End VLM Addition
 
                 std::future<void> runningWithMtxLocked = instance->sync.runningWithMutexLockedPromise.get_future();
                 instance->sync.job = std::async(std::launch::async, [instance, responseCallback]()->nvigi::Result
@@ -796,6 +1065,7 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
 #ifdef GGML_USE_CUBLAS
                     nvigi::RuntimeContextScope scope(*instance);
 #endif
+                    // Begin VLM Modification - VLM added instance->clipContext
                     if (generate(&instance->sync, instance->llamaContext.model.get(), instance->llamaContext.context.get(), instance->clipContext, instance->params, responseCallback))
                     {
                         instance->state.store(nvigi::kInferenceExecutionStateInvalid);
@@ -831,9 +1101,11 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
                     std::unique_lock<std::mutex> lock(instance->sync.mtx);
                     // Prepare for our turn based on model's template, note that system prompt is NOT used here
                     instance->sync.input = ai::generateTurn(instance->modelInfo, user, assistant);
+                    // Begin VLM Addition
                     instance->sync.rgb_data = rgb_data;
                     instance->sync.rgb_width = rgb_width;
                     instance->sync.rgb_height = rgb_height;
+                    // End VLM Addition
                     instance->sync.execCtx = execCtx;
                     instance->sync.silenceOutput.store(false);
                     instance->sync.newInput.store(true);
@@ -856,13 +1128,15 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
         else
         {
             // Starting new conversation first time, prepare prompt based on model's template
-            instance->params.prompt = ai::generatePrompt(instance->modelInfo, system, user, assistant);
+            igiProcessChatTemplate(shouldProcessChatTemplate, instance, system, user, assistant);
             instance->sync.silenceOutput.store(false);
             instance->sync.runningChat.store(true);
             instance->sync.execCtx = execCtx;
+            // Begin VLM Addition
             instance->sync.rgb_data = rgb_data;
             instance->sync.rgb_width = rgb_width;
             instance->sync.rgb_height = rgb_height;
+            // End VLM Addition
             std::future<void> runningWithMtxLocked = instance->sync.runningWithMutexLockedPromise.get_future();
             // First time initializing our job
             instance->sync.job = std::async(std::launch::async, [instance, responseCallback]()->nvigi::Result
@@ -870,6 +1144,7 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
 #ifdef GGML_USE_CUBLAS
                 nvigi::RuntimeContextScope scope(*instance);
 #endif
+                // Begin VLM Modification - VLM added instance->clipContext
                 if (generate(&instance->sync, instance->llamaContext.model.get(), instance->llamaContext.context.get(), instance->clipContext, instance->params, responseCallback))
                 {
                     instance->state.store(nvigi::kInferenceExecutionStateInvalid);
@@ -899,10 +1174,12 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
                 return result;
             }
 
-            instance->params.prompt = ai::generatePrompt(instance->modelInfo, system, user, assistant);
+            igiProcessChatTemplate(shouldProcessChatTemplate, instance, system, user, assistant);
+            // Begin VLM Addition
             instance->sync.rgb_data = rgb_data;
             instance->sync.rgb_width = rgb_width;
             instance->sync.rgb_height = rgb_height;
+            // End VLM Addition
             instance->sync.execCtx = execCtx;
             instance->sync.silenceOutput.store(false);
 
@@ -911,6 +1188,7 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
 #ifdef GGML_USE_CUBLAS
                 nvigi::RuntimeContextScope scope(*instance);
 #endif
+                // Begin VLM Modification - VLM added instance->clipContext
                 if (generate(&instance->sync, instance->llamaContext.model.get(), instance->llamaContext.context.get(), instance->clipContext, instance->params, responseCallback))
                 {
                     instance->state.store(nvigi::kInferenceExecutionStateInvalid);
@@ -922,7 +1200,7 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
         }
         else
         {
-            instance->params.prompt = ai::generatePrompt(instance->modelInfo, system, user, assistant);
+            igiProcessChatTemplate(shouldProcessChatTemplate, instance, system, user, assistant);
             instance->sync.execCtx = execCtx;
             instance->sync.silenceOutput.store(false);
             instance->sync.runningChat.store(false);
@@ -940,7 +1218,7 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
         }
     }
 
-#if GGML_USE_CUBLAS
+#if GGML_USE_CUBLAS || (defined(GGML_USE_D3D12) && PROFILE_D3D)
     nvtxRangePop();
 #endif
 
@@ -993,18 +1271,69 @@ Result nvigiPluginGetInfo(framework::IFramework* framework, nvigi::plugin::Plugi
     info.build = GIT_BRANCH_AND_LAST_COMMIT;
     info.interfaces = { plugin::getInterfaceInfo<IGeneralPurposeTransformer>()};
 
+	// Always the same OS requirements
+    info.minOS = { NVIGI_DEF_MIN_OS_MAJOR, NVIGI_DEF_MIN_OS_MINOR, NVIGI_DEF_MIN_OS_BUILD };
+
+    // Default to no GPU requirements for now
+    info.minGPUArch = {};
+    info.minDriver = {};
+
 #ifdef GGML_USE_CUBLAS
     info.minDriver = { NVIGI_CUDA_MIN_DRIVER_MAJOR, NVIGI_CUDA_MIN_DRIVER_MINOR, NVIGI_CUDA_MIN_DRIVER_BUILD };
-    info.minOS = { NVIGI_DEF_MIN_OS_MAJOR, NVIGI_DEF_MIN_OS_MINOR, NVIGI_DEF_MIN_OS_BUILD };
     info.minGPUArch = { NVIGI_CUDA_MIN_GPU_ARCH };
     info.requiredVendor = VendorId::eNVDA;
+
+    nvigi::system::ISystem* isystem{};
+    if (!framework::getInterface(framework, nvigi::core::framework::kId, &isystem))
+    {
+        NVIGI_LOG_ERROR("Missing interface from 'nvigi.plugin.hwi.cuda'");
+        return kResultInvalidState;
+    }
+
+    const nvigi::system::SystemCaps* caps = isystem->getSystemCaps();
+    if (caps && caps->driverVersion.major < 580)
+    {
+        NVIGI_LOG_WARN_ONCE("CUDA backend recommends driver version 580 or higher, current version is %d.%d.%d - see documentation for details", caps->driverVersion.major, caps->driverVersion.minor, caps->driverVersion.build);
+    }
+
+    // Must release, as we may not have the chance to release it later if we are not registered
+    framework::releaseInterface(plugin::getContext()->framework, nvigi::core::framework::kId, isystem);
+#elif defined(GGML_USE_D3D12)
+    if (!framework::getInterface(framework, nvigi::core::framework::kId, &ctx.isystem))
+    {
+        NVIGI_LOG_ERROR("Missing interface from 'nvigi.plugin.hwi.cuda'");
+        return kResultInvalidState;
+    }
+
+	// Default to any adapter and no driver restrictions
+    info.requiredVendor = VendorId::eAny;
+
+	// Check if we have an NV adapter available and if so, set the minimum GPU architecture and driver version
+    const nvigi::system::SystemCaps *caps = ctx.isystem->getSystemCaps();
+    for (uint32_t i = 0; i < caps->adapterCount; i++)
+    {
+        const nvigi::system::Adapter* adapter = caps->adapters[i];
+        if (adapter->vendor == VendorId::eNVDA)
+        {
+            info.minGPUArch = { NVIGI_CUDA_MIN_GPU_ARCH };
+            info.minDriver = { NVIGI_D3D12_MIN_DRIVER_MAJOR, NVIGI_D3D12_MIN_DRIVER_MINOR, NVIGI_D3D12_MIN_DRIVER_BUILD };
+            info.requiredVendor = VendorId::eNVDA;
+            break;
+        }
+        // Later, we could add min driver and arch for AMD or other vendors
+	}
+
+    // Must release, as we may not have the chance to release it later if we are not registered
+    framework::releaseInterface(plugin::getContext()->framework, nvigi::core::framework::kId, ctx.isystem);
+    ctx.isystem = nullptr;
+#elif defined(GGML_USE_VULKAN)
+	// Requires SOME GPU with Vulkan support, no specific vendor or driver version
+    info.requiredVendor = VendorId::eAny;
 #else
-    //! Defaults indicate no restrictions - plugin can run on any system, even without any adapter
+	// No requirements for CPU backend
     info.requiredVendor = nvigi::VendorId::eNone;
-    info.minDriver = {};
-    info.minOS = { NVIGI_DEF_MIN_OS_MAJOR, NVIGI_DEF_MIN_OS_MINOR, NVIGI_DEF_MIN_OS_BUILD };
-    info.minGPUArch = {};
 #endif
+
     return kResultOk;
 }
 
@@ -1026,6 +1355,12 @@ Result nvigiPluginRegister(framework::IFramework* framework)
         NVIGI_LOG_ERROR("Missing interface from 'nvigi.plugin.hwi.cuda'");
         return kResultInvalidState;
     }
+#elif defined(GGML_USE_D3D12)
+    if (!framework::getInterface(framework, nvigi::core::framework::kId, &ctx.isystem))
+    {
+        NVIGI_LOG_ERROR("Missing core interface 'nvigi::system::ISystem'");
+        return kResultMissingInterface;
+    }
 #endif
 
     ctx.api.createInstance = gpt::createInstance;
@@ -1041,6 +1376,10 @@ Result nvigiPluginRegister(framework::IFramework* framework)
     common_log_pause(llama_log);
     // End Llama Logging Setup
 
+#if defined(GGML_USE_VULKAN) || defined(GGML_USE_D3D12)
+    NVIGI_LOG_WARN("IMPORTANT: D3D12 and Vulkan are experimental backends and may not work or perform as expected!!!");
+#endif
+
     return kResultOk;
 }
 
@@ -1055,6 +1394,11 @@ Result nvigiPluginDeregister()
 #if GGML_USE_CUBLAS
     framework::releaseInterface(plugin::getContext()->framework, plugin::hwi::cuda::kId, ctx.icig);
     ctx.icig = nullptr;
+#elif defined(GGML_USE_D3D12)
+    framework::releaseInterface(plugin::getContext()->framework, plugin::hwi::d3d12::kId, ctx.iscg);
+    ctx.iscg = nullptr;
+    framework::releaseInterface(plugin::getContext()->framework, nvigi::core::framework::kId, ctx.isystem);
+    ctx.isystem = nullptr;
 #endif
 
     // call this to flush any threads waiting to write to disk
@@ -1062,6 +1406,10 @@ Result nvigiPluginDeregister()
 
     llama_backend_free();
 
+#if defined(GGML_USE_VULKAN) || defined(GGML_USE_D3D12)
+    // llama.cpp does not provide a way to free backends explicitly hence the hack
+    ggml_vk_backend_free();
+#endif
     // cpu 
     // Note, GPT hasn't shown the same crash as Embed, but could be susceptible to it as well.
     // Reference:  https://ofekshilon.com/2017/11/03/on-omp_wait_policy/

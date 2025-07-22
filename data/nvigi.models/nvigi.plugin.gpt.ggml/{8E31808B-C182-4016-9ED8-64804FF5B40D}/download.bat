@@ -4,4 +4,6 @@ tar -x -f out.zip -O "{8E31808B-C182-4016-9ED8-64804FF5B40D}/nemotron-4-mini-4b-
 tar -x -f out.zip -O "{8E31808B-C182-4016-9ED8-64804FF5B40D}/NVIDIA Software and Model Evaluation License Agreement (2024.06.28).txt" > "NVIDIA Software and Model Evaluation License Agreement (2024.06.28).txt"
 del out.zip
 popd
-pause
+IF NOT "%1"=="-nopause" (
+	pause
+)

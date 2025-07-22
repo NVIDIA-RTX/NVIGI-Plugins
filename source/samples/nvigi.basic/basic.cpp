@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 
@@ -325,6 +325,7 @@ struct NVIGIAppCtx
     nvigi::PluginID gptId{};
     nvigi::InferenceInstance* gpt{};
     nvigi::ITextToSpeech* itts{};
+    nvigi::PluginID ttsId{};
     nvigi::InferenceInstance* tts{};
 };
 
@@ -574,7 +575,12 @@ int InitTTS(const std::string& modelDir,
     const std::string& extendedPhonemeDict, const std::string& guidTTS, size_t vramBudgetMB)
 {
     //! TTS Interface and Instance
-    if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigi::plugin::tts::asqflow::trt::kId, &nvigiCtx.itts, ptr_nvigiLoadInterface)))
+    //! Detect backend based on GUID
+    //! GGML: {90D81B98-0954-4D64-B901-B4F7A3189DEC}
+    //! TRT:  {81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F}
+    nvigiCtx.ttsId = (guidTTS == "{90D81B98-0954-4D64-B901-B4F7A3189DEC}") ? 
+        nvigi::plugin::tts::asqflow_ggml::cuda::kId : nvigi::plugin::tts::asqflow_trt::kId;
+    if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigiCtx.ttsId, &nvigiCtx.itts, ptr_nvigiLoadInterface)))
     {
         loggingCallback(nvigi::LogType::eError, "Could not query TTS interface");
         return -1;
@@ -618,8 +624,8 @@ int InitTTS(const std::string& modelDir,
 int ReleaseTTS()
 {
     nvigiCtx.itts->destroyInstance(nvigiCtx.tts);
-    // Can be cloud or local
-    if (NVIGI_FAILED(result, ptr_nvigiUnloadInterface(nvigi::plugin::tts::asqflow::trt::kId, nvigiCtx.itts)))
+    // Can be GGML or TRT
+    if (NVIGI_FAILED(result, ptr_nvigiUnloadInterface(nvigiCtx.ttsId, nvigiCtx.itts)))
     {
         loggingCallback(nvigi::LogType::eError, "Error in 'nvigiUnloadInterface'");
         return -1;
@@ -981,6 +987,13 @@ int RunInference(bool& hasAudio, nvigi::InferenceDataAudioSTLHelper& audioData, 
 
 int main(int argc, char** argv)
 {
+    // Block the llama output, so it does not pollute the app's console output
+#ifdef NVIGI_WINDOWS
+    FILE* f{};
+    freopen_s(&f, "NUL", "w", stderr);
+#else
+    freopen("dev/nul", "w", stderr);
+#endif
 
     CommandLineParser parser;
     parser.add_command("s", "sdk", " sdk location, if none provided assuming exe location", "");
@@ -991,7 +1004,7 @@ int main(int argc, char** argv)
     parser.add_command("", "gpt", " gpt mode, 'local' or 'cloud' (model GUID determines cloud endpoint)", "local");
     parser.add_command("", "gpt-guid", " gpt model guid in registry format", "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}");
     parser.add_command("", "asr-guid", " asr model guid in registry format", "{5CAD3A03-1272-4D43-9F3D-655417526170}");
-    parser.add_command("", "tts-guid", " tts model guid in registry format", "{81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F}");
+    parser.add_command("", "tts-guid", " tts model guid in registry format (GGML: {90D81B98-0954-4D64-B901-B4F7A3189DEC}, TRT: {81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F})", "{90D81B98-0954-4D64-B901-B4F7A3189DEC}");
     parser.add_command("t", "token", " authorization token for the cloud provider", "");
     parser.add_command("", "vram", " the amount of vram to use in MB", "8192");
 

@@ -1,6 +1,13 @@
 <project toolsVersion="6.21">
+	<dependency name="agility-sdk-code" linkPath="external/agility-sdk">
+		<package name="agility-sdk-code" version="1.615.1-x64-windows" platforms="windows-x86_64"/>
+	</dependency>
+	<dependency name="asqflowcpp" linkPath="external/asqflow.cpp">
+		<package name="asqflowcpp" version="6f9b81e_x64-windows" platforms="windows-x86_64"/>
+		<package name="asqflowcpp" version="6f9b81e_x64-linux" platforms="linux-x86_64"/>
+	</dependency>
 	<dependency name="cig_scheduler_settings" linkPath="external/cig_scheduler_settings">
-		<package name="cig_scheduler_settings_win64" version="202502282034-446fda24-main" platforms="windows-x86_64"/>
+		<package name="cig_scheduler_settings_win64" version="202507021723-ac549a08-main" platforms="windows-x86_64"/>
 	</dependency>
 	<dependency name="cuda" linkPath="external/cuda">
 		<package name="cuda" version="v12.8.0-windows-x64" platforms="windows-x86_64"/>
@@ -11,17 +18,14 @@
 		<package name="libcurl" version="8.1.2-3-linux-x86_64-static-release" platforms="linux-x86_64"/>
 	</dependency>
 	<dependency name="llamacpp" linkPath="external/llama.cpp">
-		<package name="llama.cpp" version="cab7572_x64-windows-cuda" platforms="windows-x86_64"/>
-		<package name="llamacpp" version="cab7572_x64-linux" platforms="linux-x86_64"/>
+		<package name="llamacpp" version="6d815b9_x64-windows" platforms="windows-x86_64"/>
+		<package name="llamacpp" version="e6b2933_x64-linux" platforms="linux-x86_64"/>
 	</dependency>
 	<dependency name="Microsoft.AI.DirectML.1.15.4" linkPath="external/Microsoft.AI.DirectML.1.15.4">
 		<package name="Microsoft.AI.DirectML.1.15.4" version="1.15.4" platforms="windows-x86_64"/>
 	</dependency>
 	<dependency name="microsoft.ml.onnxruntime.directml.1.20.1" linkPath="external/microsoft.ml.onnxruntime.directml.1.20.1">
 		<package name="microsoft.ml.onnxruntime.directml.1.20.1" version="1.20.1" platforms="windows-x86_64"/>
-	</dependency>
-	<dependency name="Microsoft.ML.OnnxRuntimeGenAI.DirectML" linkPath="external/Microsoft.ML.OnnxRuntimeGenAI.DirectML">
-		<package name="Microsoft.ML.OnnxRuntimeGenAI.DirectML" version="0.2.0" platforms="windows-x86_64"/>
 	</dependency>
 	<dependency name="nlohmann_json" linkPath="external/json">
 		<package name="nlohmann_json" version="3.10.5.1-b440a32a-windows-x86_64" platforms="windows-x86_64"/>
@@ -32,14 +36,19 @@
 		<package name="openssl" version="3.2.0_x64-linux" platforms="linux-x86_64"/>
 	</dependency>
 	<dependency name="SimpleFarForTTS" linkPath="external/SimpleFarForTTS">
-		<package name="SimpleFarForTTS" version="0.0.2" platforms="windows-x86_64"/>
+		<package name="SimpleFarForTTS" version="0.1.2-windows" platforms="windows-x86_64"/>
+		<package name="SimpleFarForTTS" version="0.1.2-linux" platforms="linux-x86_64"/>
 	</dependency>
 	<dependency name="tensorrt" linkPath="external/tensorrt">
-		<package name="tensorrt" version="10.6.0.26-cuda-12.6-ga-windows-x86_64" platforms="windows-x86_64"/>
+		<package name="tensorrt" version="TensorRT-10.10.0.31.Windows.win10.cuda-12.9_v2" platforms="windows-x86_64"/>
+	</dependency>
+	<dependency name="vulkansdk" linkPath="external/vulkanSDK">
+		<package name="vulkansdk" version="1.4.304.0-windows-x86_64" platforms="windows-x86_64"/>
+		<package name="vulkansdk" version="1.4.304.0-linux_x86_64" platforms="linux-x86_64"/>
 	</dependency>
 	<dependency name="whispercpp" linkPath="external/whisper.cpp">
-		<package name="whisper.cpp" version="45e8a3b_x64-windows-cuda" platforms="windows-x86_64"/>
-		<package name="whispercpp" version="45e8a3b_x64-linux" platforms="linux-x86_64"/>
+		<package name="whispercpp" version="10ea481_x64-windows" platforms="windows-x86_64"/>
+		<package name="whispercpp" version="4600650_x64-linux" platforms="linux-x86_64"/>
 	</dependency>
 	<dependency name="zlib" linkPath="external/zlib">
 		<package name="zlib" version="1.3.1_x64-windows" platforms="windows-x86_64"/>

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 
@@ -313,19 +313,15 @@ int ReleaseGPT(NVIGIAppCtx& nvigiCtx)
     return 0;
 }
 
-void GetCompletion(NVIGIAppCtx& nvigiCtx, const std::string& prompt, std::string& answer)
+void GetCompletion(NVIGIAppCtx& nvigiCtx, const std::string& system_prompt, const std::string& user_prompt, std::string& answer)
 {
     answer = "";
 
-    nvigi::CpuData text(prompt.length() + 1, (void*)prompt.c_str());
-    nvigi::InferenceDataText data(text);
-    char buffer[1024];
-    nvigi::CpuData text1(1024, (void*)buffer);
-    nvigi::InferenceDataText data1(text1);
-    std::vector<nvigi::InferenceDataSlot> inSlots = { {nvigi::kGPTDataSlotUser, data} };
-    std::vector<nvigi::InferenceDataSlot> outSlots = { {nvigi::kGPTDataSlotResponse, data1} };
+    nvigi::InferenceDataTextSTLHelper system_data( system_prompt );
+    nvigi::InferenceDataTextSTLHelper user_data( user_prompt );
+
+    std::vector<nvigi::InferenceDataSlot> inSlots = { {nvigi::kGPTDataSlotSystem, system_data}, {nvigi::kGPTDataSlotUser, user_data} };
     nvigi::InferenceDataSlotArray inputs = { inSlots.size(), inSlots.data() };
-    nvigi::InferenceDataSlotArray outputs = { outSlots.size(), outSlots.data() };
 
     nvigi::GPTRuntimeParameters runtime{};
     runtime.seed = -1;
@@ -374,7 +370,6 @@ void GetCompletion(NVIGIAppCtx& nvigiCtx, const std::string& prompt, std::string
         };
 
     ctx.inputs = &inputs;
-    ctx.outputs = &outputs;
     ctx.runtimeParameters = runtime;
 
     if (ctx.instance->evaluate(&ctx) != nvigi::kResultOk)
@@ -599,6 +594,13 @@ void RetrieveContext(NVIGIAppCtx& nvigiCtx, const std::string& input_prompt, Vec
 int main(int argc, char** argv)
 {
     NVIGIAppCtx nvigiCtx;
+	// Block the llama output, so it does not pollute the app's console output
+#ifdef NVIGI_WINDOWS
+    FILE* f{};
+    freopen_s(&f, "NUL", "w", stderr);
+#else
+    freopen("dev/nul", "w", stderr);
+#endif
 
     if (argc != 3)
     {
@@ -658,19 +660,15 @@ int main(int argc, char** argv)
         size_t top_n = 5;
         RetrieveContext(nvigiCtx, user_prompt, text_embedding, text_corpus, top_n, context);
 
-        //! This prompt template is built around Nemotron4-mini-instruct.  Modify it as needed for other LLMs
-        //! Note white space and new lines are important to correct usage of the prompt template.  Pay attention.
-        std::string prompt_template =
-            "<extra_id_0>System\n"
-            + system_prompt + "\n"
-            "<context>\n" + context + "\n</context>\n"
-            "<extra_id_1>User\n"
-            + user_prompt + "\n"
-            "<extra_id_1>Assistant\n";
+        //! Since we are in instruct mode, not interactive mode, pass in the system prompt every time.  Adjust accordingly if you want to run in interactive/conversational mode.
+        //! Note: the <context> can go with the user prompt as well...the markups for context might vary per LLM both in how they are annotated and where they can go, 
+        //! so pay attention if you switch LLMs.  These markups are for nemotron4-mini-instruct v0.1.3
+        std::string system_and_context = system_prompt + "\n"
+            "<context>\n" + context + "\n</context>\n";
 
         //! Pass the prompt to the LLM for completion.
         std::string answer = "";
-        GetCompletion(nvigiCtx, prompt_template, answer);
+        GetCompletion(nvigiCtx, system_and_context, user_prompt, answer);
 
         std::cout << "\nUser: ";
         std::getline(std::cin, user_prompt);

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 
@@ -22,6 +22,14 @@ namespace cloud::rest
 {
 constexpr PluginID kId = { {0x3553c9f3, 0x686c, 0x4f08,{0x83, 0x8e, 0xf2, 0xe3, 0xb4, 0x01, 0x9a, 0x72}}, 0xa589b7 }; //{3553C9F3-686C-4F08-838E-F2E3B4019A72} [nvigi.plugin.gpt.cloud.rest]
 }
+namespace ggml::vulkan
+{
+constexpr PluginID kId = { {0xc36d66a8, 0x067c, 0x48e3,{0x98, 0x99, 0x6d, 0xd2, 0x36, 0x10, 0xca, 0x08}}, 0xdb9f72 }; //{C36D66A8-067C-48E3-9899-6DD23610CA08} [nvigi.plugin.gpt.ggml.vulkan]
+}
+namespace ggml::d3d12
+{
+constexpr PluginID kId = { {0xf007256a, 0xe71e, 0x4ffe,{0xb3, 0xa8, 0x30, 0xd7, 0x7e, 0x42, 0x58, 0x14}}, 0xb530c8 }; //{F007256A-E71E-4FFE-B3A8-30D77E425814} [nvigi.plugin.gpt.ggml.d3d12]
+}
 
 
 }
@@ -30,17 +38,36 @@ constexpr PluginID kId = { {0x3553c9f3, 0x686c, 0x4f08,{0x83, 0x8e, 0xf2, 0xe3, 
 constexpr const char* kGPTDataSlotSystem = "system";
 constexpr const char* kGPTDataSlotUser = "text"; // matching ASR output when used in a pipeline
 constexpr const char* kGPTDataSlotAssistant = "assistant";
-constexpr const char* kGPTDataSlotImage = "image";
+constexpr const char* kGPTDataSlotImage = "image"; // Begin VLM Addition -- Added for VLM -- End VLM Addition
 constexpr const char* kGPTDataSlotResponse = "text";
 constexpr const char* kGPTDataSlotJSON = "json"; // JSON input/output for the cloud.rest implementation
 
-// {506C5935-67C6-4136-9550-36BBA83C93BC}
+//! NOTE: Not all quantized GGML types are necessarily allowed with the KV cache.
+//! 
+constexpr int32_t kQuantizedTypeFP32 = 0;
+constexpr int32_t kQuantizedTypeFP16 = 1;
+constexpr int32_t kQuantizedTypeQ4_0 = 2;
+constexpr int32_t kQuantizedTypeQ8_0 = 8;
+
+//! GPT Creation Parameters
+//! 
+//! NOTE: Chain GPTRuntimeParameters to this structure to provide runtime parameters
+//! 
+//! {506C5935-67C6-4136-9550-36BBA83C93BC}
 struct alignas(8) GPTCreationParameters {
     GPTCreationParameters() {}; 
-    NVIGI_UID(UID({ 0x506c5935, 0x67c6, 0x4136,{ 0x95, 0x50, 0x36, 0xbb, 0xa8, 0x3c, 0x93, 0xbc } }), kStructVersion1);
+    NVIGI_UID(UID({ 0x506c5935, 0x67c6, 0x4136,{ 0x95, 0x50, 0x36, 0xbb, 0xa8, 0x3c, 0x93, 0xbc } }), kStructVersion2);
     int32_t maxNumTokensToPredict = 200;
     int32_t contextSize = 512;
     int32_t seed = -1;
+    // v2
+    bool flashAttention = false;                // if true, the model will use flash attention
+    int32_t batchSize = 2048;                   // batch size for prompt processing (must be >=32 to use BLAS and can NOT be increased at runtime)
+    int32_t physicalBatchSize = 512;            // physical batch size for prompt processing (must be >=32 to use BLAS)
+    int32_t cacheTypeK = kQuantizedTypeFP16;    // optional, only supported by the GGML backend and maps directly to ggml_type, default fp16
+    int32_t cacheTypeV = kQuantizedTypeFP16;    // optional, only supported by the GGML backend and maps directly to ggml_type, default fp16
+
+    //! v3+ members go here, remember to update the kStructVersionN in the above NVIGI_UID macro!
 };
 
 NVIGI_VALIDATE_STRUCT(GPTCreationParameters)
@@ -48,7 +75,7 @@ NVIGI_VALIDATE_STRUCT(GPTCreationParameters)
 // {FEB5F4A9-8A02-4864-8757-081F42381160}
 struct alignas(8) GPTRuntimeParameters {
     GPTRuntimeParameters() {}; 
-    NVIGI_UID(UID({ 0xfeb5f4a9, 0x8a02, 0x4864,{ 0x87, 0x57, 0x8, 0x1f, 0x42, 0x38, 0x11, 0x60 } }), kStructVersion1);
+    NVIGI_UID(UID({ 0xfeb5f4a9, 0x8a02, 0x4864,{ 0x87, 0x57, 0x8, 0x1f, 0x42, 0x38, 0x11, 0x60 } }), kStructVersion3);
     uint32_t seed = 0xFFFFFFFF;     // RNG seed
     int32_t tokensToPredict = -1;   // new tokens to predict
     int32_t batchSize = 512;        // batch size for prompt processing (must be >=32 to use BLAS)
@@ -63,6 +90,12 @@ struct alignas(8) GPTRuntimeParameters {
     const char* reversePrompt{};    // reverse prompt for the interactive mode
     const char* prefix{};           // prefix for the user input
     const char* suffix{};           // suffix for the user input
+    // v2
+    float frameTimeMs = 0.0f;           // optional, used to limit the token generation rate, disabled by default
+    int32_t targetTokensPerSecond = -1; // optional, used to limit the token generation rate, disabled by default
+
+    //! v3+ members go here, remember to update the kStructVersionN in the above NVIGI_UID macro!
+    bool promptPretemplatized = false;          // if true, will not attempt to apply any sort of prompt templatization from the model.  User is responsible for getting it right.
 };
 
 NVIGI_VALIDATE_STRUCT(GPTRuntimeParameters)
@@ -87,7 +120,7 @@ struct alignas(8) GPTSamplerParameters
     float   minP = 0.05f;               // 0.0 = disabled
     float   xtcProbability = 0.00f;     // 0.0 = disabled
     float   xtcThreshold = 0.10f;       // > 0.5 disables XTC
-    float   tfsZ = 1.00f;               // 1.0 = disabled
+    float   tfsZ = 1.00f;               // DEPRECATED
     float   typP = 1.00f;               // typical_p, 1.0 = disabled
     float   dynatempRange = 0.00f;      // 0.0 = disabled
     float   dynatempExponent = 1.00f;   // controls how entropy maps to temperature in dynamic temperature sampler
@@ -98,8 +131,9 @@ struct alignas(8) GPTSamplerParameters
     int32_t mirostat = 0;               // 0 = disabled, 1 = mirostat, 2 = mirostat 2.0
     float   mirostatTAU = 5.00f;        // target entropy
     float   mirostatETA = 0.10f;        // learning rate
-    bool    penalizeNewLine = false;    // consider newlines as a repeatable token
+    bool    penalizeNewLine = false;    // DEPRECATED
     bool    ignoreEOS = false;
+
     // v2
     bool persistentKVCache = false;         // if true, the KV cache will NOT be cleared between calls in instruct mode or when new system prompt is provided in chat (interactive) mode
     const char* grammar{};                  // optional BNF-like grammar to constrain sampling

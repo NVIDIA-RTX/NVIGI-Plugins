@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 
@@ -14,7 +14,7 @@
 #include "source/plugins/nvigi.gpt/rest/versions.h"
 #include "source/utils/nvigi.ai/ai.h"
 #include "source/utils/nvigi.ai/ai_data_helpers.h"
-#include "source/plugins/nvigi.net/nvigi_net.h"
+#include "source/plugins/nvigi.net/net.h"
 #include "source/plugins/nvigi.gpt/nvigi_gpt.h"
 #include "_artifacts/gitVersion.h"
 

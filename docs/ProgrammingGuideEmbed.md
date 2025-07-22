@@ -5,11 +5,9 @@ The focus of this guide is on using In-Game Inferencing to integrate an embeddin
 
 > **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the [rag sample](../source/samples/nvigi.rag/rag.cpp)
 
-## Version 1.1.0 General Access
-
 ## 1.0 INITIALIZE AND SHUTDOWN
 
-Please read the `docs/ProgrammingGuide.md` located in the NVIGI Core package to learn more about initializing and shutting down NVIGI SDK. :only:`binary_pack:[Which may be found here in combined binary packs](../../../nvigi_core/docs/ProgrammingGuide.md)` 
+Please read the `docs/ProgrammingGuide.md`  :only:`binary_pack:([Which may be found here in combined binary packs](../../../nvigi_core/docs/ProgrammingGuide.md))` located in the NVIGI Core package to learn more about initializing and shutting down NVIGI SDK. 
 
 ## 2.0 OBTAIN EMBED INTERFACE(S)
 
