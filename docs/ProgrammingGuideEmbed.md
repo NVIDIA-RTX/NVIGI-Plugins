@@ -7,7 +7,7 @@ The focus of this guide is on using In-Game Inferencing to integrate an embeddin
 
 ## 1.0 INITIALIZE AND SHUTDOWN
 
-Please read the `docs/ProgrammingGuide.md`  :only:`binary_pack:([Which may be found here in combined binary packs](../../../nvigi_core/docs/ProgrammingGuide.md))` located in the NVIGI Core package to learn more about initializing and shutting down NVIGI SDK. 
+Please read the [Programming Guide](../../../nvigi_core/docs/ProgrammingGuide.md) located in the NVIGI Core package to learn more about initializing and shutting down NVIGI SDK. 
 
 ## 2.0 OBTAIN EMBED INTERFACE(S)
 

@@ -266,6 +266,42 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
 
     *_instance = nullptr;
 
+    std::string pathToModel{};
+
+    if (ctx.modelInfo.empty())
+    {
+        if (!ai::findModels(common, { "gguf" }, ctx.modelInfo))
+        {
+            return kResultInvalidParameter;
+        }
+    }
+
+    std::vector<std::string> files;
+    try
+    {
+        files = ctx.modelInfo[common->modelGUID]["gguf"];
+
+#if defined(GGML_USE_CUBLAS) || defined(GGML_USE_VULKAN) || defined(GGML_USE_D3D12)
+        size_t neededVRAM = ctx.modelInfo[common->modelGUID]["vram"];
+        if (common->vramBudgetMB < neededVRAM)
+        {
+            NVIGI_LOG_WARN("Provided VRAM %uMB is insufficient, required VRAM is %uMB", common->vramBudgetMB, neededVRAM);
+            return kResultInsufficientResources;
+        }
+#endif
+    }
+    catch (const std::exception& e)
+    {
+        NVIGI_LOG_ERROR("Exception %s", e.what());
+        return kResultJSONException;
+    }
+
+    if (files.empty())
+    {
+        NVIGI_LOG_ERROR("Failed to find model in the expected directory '%s'", common->utf8PathToModels);
+        return kResultInvalidParameter;
+    }
+
     auto instanceData = new nvigi::asr::InferenceContext(_params);
     if (!instanceData->cudaContext.constructorSucceeded) return kResultInvalidState;
 
@@ -300,42 +336,6 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
 #endif
 #endif
     {
-        std::string pathToModel{};
-        
-        if (ctx.modelInfo.empty())
-        {
-            if (!ai::findModels(common, { "gguf" }, ctx.modelInfo))
-            {
-                return kResultInvalidParameter;
-            }
-        }
-
-        std::vector<std::string> files;
-        try
-        {
-            files = ctx.modelInfo[common->modelGUID]["gguf"];
-
-#if defined(GGML_USE_CUBLAS) || defined(GGML_USE_VULKAN) || defined(GGML_USE_D3D12)
-            size_t neededVRAM = ctx.modelInfo[common->modelGUID]["vram"];
-            if (common->vramBudgetMB < neededVRAM)
-            {
-                NVIGI_LOG_WARN("Provided VRAM %uMB is insufficient, required VRAM is %uMB", common->vramBudgetMB, neededVRAM);
-                return kResultInsufficientResources;
-            }
-#endif
-        }
-        catch (const std::exception& e)
-        {
-            NVIGI_LOG_ERROR("Exception %s", e.what());
-            return kResultJSONException;
-        }
-
-        if (files.empty())
-        {
-            NVIGI_LOG_ERROR("Failed to find model in the expected directory '%s'", common->utf8PathToModels);
-            return kResultInvalidParameter;
-        }
-
         pathToModel = files[0];
 
         NVIGI_LOG_INFO("Loading model '%s'", pathToModel.c_str());

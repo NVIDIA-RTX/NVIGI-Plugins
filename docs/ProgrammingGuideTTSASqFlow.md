@@ -1,13 +1,15 @@
 # TTS Riva Magpie Flow (ASqFlow) Programming Guide
 
-The focus of this guide is on using AI Inference Manager to integrate a TTS model into an application.  The model is known as Riva Magpie Flow, but the plugin is named A-Squared Flow (ASqFlow), based upon the original name of the model as shipped in NVIGI 1.1.1.  To avoid issues with applications upgrading from 1.1.1 to a bewer version, the plugin name was retained.
+The focus of this guide is on using AI Inference Manager to integrate a TTS model into an application.  The model is known as Riva Magpie Flow, but the plugin is named A-Squared Flow (ASqFlow), based upon the original name of the model as shipped in NVIGI 1.1.1.  To avoid issues with applications upgrading from 1.1.1 to a newer version, the plugin name was retained.
 
 > **IMPORTANT:**
 > **This feature is considered experimental in this release.  It is subject to significant change in later releases, possibly requring app modifications.**
 
-> **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the SDK's Basic command line sample [Source Code](../source/samples/nvigi.basic/basic.cpp) and [Docs](../docs/Samples.md).  The Basic command-line sample includes the option to pass the results of an LLM query to TTS, and then plays it back.
+> **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the SDK's Basic command line sample [Source Code](../source/samples/nvigi.basic/basic.cpp) and [Docs](Samples.md).  The Basic command-line sample includes the option to pass the results of an LLM query to TTS, and then plays it back.
 
 > **IMPORTANT NOTE: The CUDA backend (nvigi.plugin.tts.asqflow-ggml.cuda.dll) strongly recommends an NVIDIA R580 driver or newer in order to avoid a potential memory leak if CiG (CUDA in Graphics) is used and the application deletes D3D12 command queues mid-application.**
+
+> **IMPORTANT NOTE: Newer releases of the ASqFlow NVIGI plugin are _NOT_ backwards compatible with older versions of the Riva Magpie Flow model. To avoid compatibility issues, please always use the Riva Magpie Flow model that ships with the SDK release that is being integrated.**
 
 A general overview of the components within the cpp ASqFlow implementation, including its capabilities, expected inputs, and outputs is shown in the diagram below:
 
@@ -89,14 +91,16 @@ The chunking mechanism processes each text segment independently, generating com
 
 ## 1.2 INITIALIZE AND SHUTDOWN
 
-Please read the `docs/ProgrammingGuide.md`  :only:`binary_pack:([Which may be found here in combined binary packs](../../../nvigi_core/docs/ProgrammingGuide.md))` located in the NVIGI Core package to learn more about initializing and shutting down NVIGI SDK. 
+Please read the [Programming Guide](../../../nvigi_core/docs/ProgrammingGuide.md) located in the NVIGI Core package to learn more about initializing and shutting down NVIGI SDK. 
 
 ## 2.0 OBTAIN TTS INTERFACE(S)
 
 Next, we need to retrieve TTS's API interface based on ASqFlow. ASqFlow supports multiple backends:
 
 - **TRT Backend**: Optimized TensorRT implementation
-- **GGML CUDA Backend**: Experimental GGML-based implementation with additional runtime configuration options
+- **GGML CUDA Backend**: Experimental GGML-based implementation with additional runtime configuration options and **language selection support**. The GGML backend provides two model variants:
+  - **FP16 Model**: `{33E000D6-35A2-46D8-BCB5-E10F8CA137C0}` - Higher precision, better quality
+  - **Q4 Model**: `{3D52FDC0-5B6D-48E1-B108-84D308818602}` - Quantized model, smaller memory footprint
 
 ```cpp
 
@@ -114,6 +118,55 @@ if(NVIGI_FAILED(res, nvigiGetInterface(nvigi::plugin::tts::asqflow::ggml::cuda::
 }
 
 ```
+
+## 2.1 LANGUAGE SUPPORT (GGML Backend Only)
+
+The GGML backend provides support for multiple languages, allowing you to generate speech in different languages by setting the appropriate language code at runtime.
+
+### Supported Languages
+
+The GGML plugin reads supported languages exclusively from the model configuration file. The exact set of supported languages varies by model, but commonly include:
+- **"en"**: English (default)
+- **"en-us"**: American English
+- **"en-uk"**: British English  
+- **"es"**: Spanish
+- **"de"**: German
+
+The specific languages supported by your model are defined in the `languages_supported` field of the model configuration file (`nvigi.model.config.json`). This field contains a JSON array of language codes, for example:
+
+```json
+{
+  "languages_supported": ["en", "en-us", "en-uk", "es", "de"]
+}
+```
+
+If the `languages_supported` field is not present in the model configuration, the system will default to supporting only English ("en").
+
+### Querying Supported Languages
+
+You can programmatically query the list of supported languages from the capabilities and requirements:
+
+```cpp
+nvigi::TTSCapabilitiesAndRequirements* info{};
+getCapsAndRequirements(ittsLocal, params, &info);
+
+if (info->supportedLanguages != nullptr && info->n_languages > 0) {
+    for (uint32_t i = 0; i < info->n_languages; ++i) {
+        std::cout << "Supported language: " << info->supportedLanguages[i] << std::endl;
+    }
+}
+```
+
+### Setting Language at Runtime
+
+To specify the language for text-to-speech synthesis, set the `language` parameter in your runtime parameters:
+
+```cpp
+nvigi::TTSASqFlowRuntimeParameters runtime{};
+runtime.language = "es";  // Generate Spanish speech
+```
+
+> **NOTE**: Language selection is only available with the GGML backend. The TRT backend does not currently support language selection and will use the default English model.
 
 ## 3.0 CREATE TTS INSTANCE(S)
 
@@ -142,7 +195,13 @@ nvigi::InferenceInstance* ttsInstanceLocal;
     common.numThreads = myNumCPUThreads; // How many CPU threads is instance allowed to use
     common.vramBudgetMB = myVRAMBudget;  // How much VRAM is instance allowed to occupy
     common.utf8PathToModels = myPathToNVIGIModelRepository; // Path to provided NVIGI model repository (using UTF-8 encoding)
-    common.modelGUID = "{81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F}"; // Model GUID for ASqFlow model
+    // Model GUID for ASqFlow model - choose based on your requirements:
+    // For TRT backend:
+    common.modelGUID = "{81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F}"; // TRT model
+    
+    // For GGML backend - two options available:
+    // common.modelGUID = "{33E000D6-35A2-46D8-BCB5-E10F8CA137C0}"; // GGML FP16 model (higher quality)
+    // common.modelGUID = "{3D52FDC0-5B6D-48E1-B108-84D308818602}"; // GGML Q4 model (smaller memory footprint)
     params.warmUpModels = true; // faster inference, disable it if you want faster creation time. Default True.
 
     // Asqflow tts parameters
@@ -162,6 +221,14 @@ nvigi::InferenceInstance* ttsInstanceLocal;
     nvigi::TTSCapabilitiesAndRequirements* info{};
     getCapsAndRequirements(ittsLocal, params1, &info);
     REQUIRE(info != nullptr);
+    
+    //! GGML Backend: Query supported languages (only available with GGML plugin)
+    if (info->supportedLanguages != nullptr && info->n_languages > 0) {
+        LOG("Supported languages:");
+        for (uint32_t i = 0; i < info->n_languages; ++i) {
+            LOG("  - %s", info->supportedLanguages[i]);
+        }
+    }
 
     if(NVIGI_FAILED(res, ittsLocal.createInstance(params, &ttsInstanceLocal)))
     {
@@ -222,6 +289,10 @@ The `TTSASqFlowRuntimeParameters` structure allows you to control inference beha
 - **use_flash_attention**: 
   - **Type**: `bool`
   - **Description**: Enable flash attention for better performance (default: true). Flash attention can significantly improve memory efficiency and speed.
+
+- **language**: 
+  - **Type**: `const char*`
+  - **Description**: Language code for input text (default: "en"). Works only with GGML plugin currently. The supported languages are read from the model configuration file's `languages_supported` field. You can query the exact list of supported languages from the capabilities and requirements.
 
 > **IMPORTANT**: Providing D3D or Vulkan device and queue is highly recommended to ensure optimal performance
 
@@ -326,6 +397,7 @@ runtime.seed = -725171668;           // Random seed for reproducible results
 runtime.sampler = 1;                 // Use DPM++ sampler (0=EULER, 1=DPM++)
 runtime.dpmpp_order = 2;             // DPM++ solver order (1-3, higher = better quality)
 runtime.use_flash_attention = true;  // Enable flash attention for better performance
+runtime.language = "en";             // Language code for input text (GGML backend only)
 
 // Run inference
 nvigi::InferenceExecutionContext ctx{};

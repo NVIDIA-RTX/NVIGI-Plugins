@@ -1,9 +1,12 @@
 # Generated build directories and artifacts
 _project/
 _artifacts/
+_nvigi_pack/
+_reshade/
 _sdk/
 docs/_*/
 /coresdk
+__pycache__/
 
 # Premake
 tools/premake5

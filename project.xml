@@ -3,8 +3,8 @@
 		<package name="agility-sdk-code" version="1.615.1-x64-windows" platforms="windows-x86_64"/>
 	</dependency>
 	<dependency name="asqflowcpp" linkPath="external/asqflow.cpp">
-		<package name="asqflowcpp" version="6f9b81e_x64-windows" platforms="windows-x86_64"/>
-		<package name="asqflowcpp" version="6f9b81e_x64-linux" platforms="linux-x86_64"/>
+		<package name="asqflowcpp" version="e64bb39_x64-windows" platforms="windows-x86_64"/>
+		<package name="asqflowcpp" version="e64bb39_x64-linux" platforms="linux-x86_64"/>
 	</dependency>
 	<dependency name="cig_scheduler_settings" linkPath="external/cig_scheduler_settings">
 		<package name="cig_scheduler_settings_win64" version="202507021723-ac549a08-main" platforms="windows-x86_64"/>
@@ -12,6 +12,10 @@
 	<dependency name="cuda" linkPath="external/cuda">
 		<package name="cuda" version="v12.8.0-windows-x64" platforms="windows-x86_64"/>
 		<package name="cuda-linux-x86_64" version="12.1.0" platforms="linux-x86_64"/>
+	</dependency>
+	<dependency name="donut_prebuilt" linkPath="external/donut">
+		<package name="donut-prebuild-x86-x64" version="aa8412f-20250811_2" platforms="windows-x86_64"/>
+		<package name="donut-prebuild-x86-x64" version="aa8412f-20250811_2" platforms="linux-x86_64"/>
 	</dependency>
 	<dependency name="libcurl" linkPath="external/libcurl">
 		<package name="libcurl" version="7.80.0+nv1-windows-x86_64" platforms="windows-x86_64"/>
@@ -43,8 +47,8 @@
 		<package name="tensorrt" version="TensorRT-10.10.0.31.Windows.win10.cuda-12.9_v2" platforms="windows-x86_64"/>
 	</dependency>
 	<dependency name="vulkansdk" linkPath="external/vulkanSDK">
-		<package name="vulkansdk" version="1.4.304.0-windows-x86_64" platforms="windows-x86_64"/>
-		<package name="vulkansdk" version="1.4.304.0-linux_x86_64" platforms="linux-x86_64"/>
+		<package name="vulkansdk" version="1.4.321.1-windows-x86_64" platforms="windows-x86_64"/>
+		<package name="vulkansdk" version="1.4.321.1-linux_x86_64" platforms="linux-x86_64"/>
 	</dependency>
 	<dependency name="whispercpp" linkPath="external/whisper.cpp">
 		<package name="whispercpp" version="10ea481_x64-windows" platforms="windows-x86_64"/>

@@ -56,7 +56,7 @@ constexpr int32_t kQuantizedTypeQ8_0 = 8;
 //! {506C5935-67C6-4136-9550-36BBA83C93BC}
 struct alignas(8) GPTCreationParameters {
     GPTCreationParameters() {}; 
-    NVIGI_UID(UID({ 0x506c5935, 0x67c6, 0x4136,{ 0x95, 0x50, 0x36, 0xbb, 0xa8, 0x3c, 0x93, 0xbc } }), kStructVersion2);
+    NVIGI_UID(UID({ 0x506c5935, 0x67c6, 0x4136,{ 0x95, 0x50, 0x36, 0xbb, 0xa8, 0x3c, 0x93, 0xbc } }), kStructVersion3);
     int32_t maxNumTokensToPredict = 200;
     int32_t contextSize = 512;
     int32_t seed = -1;
@@ -68,6 +68,9 @@ struct alignas(8) GPTCreationParameters {
     int32_t cacheTypeV = kQuantizedTypeFP16;    // optional, only supported by the GGML backend and maps directly to ggml_type, default fp16
 
     //! v3+ members go here, remember to update the kStructVersionN in the above NVIGI_UID macro!
+    size_t numLoras{};          // num loras specified.
+    const char** loraNames{};   // names of the loras that should be loaded
+    const float* loraScales{};  // optional: the scales that should be applied to the lora, between 0 and 1.  If not present, must set in runtime parameters to activate.
 };
 
 NVIGI_VALIDATE_STRUCT(GPTCreationParameters)
@@ -75,7 +78,7 @@ NVIGI_VALIDATE_STRUCT(GPTCreationParameters)
 // {FEB5F4A9-8A02-4864-8757-081F42381160}
 struct alignas(8) GPTRuntimeParameters {
     GPTRuntimeParameters() {}; 
-    NVIGI_UID(UID({ 0xfeb5f4a9, 0x8a02, 0x4864,{ 0x87, 0x57, 0x8, 0x1f, 0x42, 0x38, 0x11, 0x60 } }), kStructVersion3);
+    NVIGI_UID(UID({ 0xfeb5f4a9, 0x8a02, 0x4864,{ 0x87, 0x57, 0x8, 0x1f, 0x42, 0x38, 0x11, 0x60 } }), kStructVersion4);
     uint32_t seed = 0xFFFFFFFF;     // RNG seed
     int32_t tokensToPredict = -1;   // new tokens to predict
     int32_t batchSize = 512;        // batch size for prompt processing (must be >=32 to use BLAS)
@@ -96,6 +99,11 @@ struct alignas(8) GPTRuntimeParameters {
 
     //! v3+ members go here, remember to update the kStructVersionN in the above NVIGI_UID macro!
     bool promptPretemplatized = false;          // if true, will not attempt to apply any sort of prompt templatization from the model.  User is responsible for getting it right.
+
+    //! v4+ members go here, remember to update the kStructVersionN in the above NVIGI_UID macro!
+    size_t numLoras{};              // num loras being updated
+    const char** loraNames{};       // names of the loras being updated.  Must match one of the names set during GPTCreationParameters
+    const float* loraScales{};      // scale of the loras being updated.  Can use this to dynamically turn on/off loras per evaluate call.
 };
 
 NVIGI_VALIDATE_STRUCT(GPTRuntimeParameters)

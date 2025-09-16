@@ -41,10 +41,14 @@ using json = nlohmann::json;
 #if PROFILE_D3D
 #include "nvtx3/nvToolsExt.h"
 #endif
-extern void ggml_d3d12_set_params(ID3D12Device *device, ID3D12CommandQueue *cmd_queue_direct,
-                                  ID3D12CommandQueue *cmd_queue_compute, ID3D12CommandQueue *cmd_queue_copy,
-                                  nvigi::PFun_createCommittedResource *createCommittedResource, nvigi::PFun_destroyResource *destroyResource,
-                                  void *userContextCreate, void *userContextDestroy, bool allowReBAR);
+namespace nvigi {
+    // this should match the PFun_commandListAction defined in WhisperCPP - redefining as it's at a depth/scope in WhisperCPP not exposed to IGI
+    using PFun_commandListAction = void(ID3D12CommandList* pCommandList, int action);
+}
+extern void ggml_d3d12_set_params(ID3D12Device* device, ID3D12CommandQueue* cmd_queue_direct,
+    ID3D12CommandQueue* cmd_queue_compute, ID3D12CommandQueue* cmd_queue_copy,
+    nvigi::PFun_createCommittedResource* createCommittedResource, nvigi::PFun_destroyResource* destroyResource,
+    void* userContextCreate, void* userContextDestroy, bool allowReBAR, nvigi::PFun_commandListAction* commandListAction);
 #elif defined GGML_USE_VULKAN
 #include "external/vulkanSDK/include/vulkan/vulkan.h"
 #include "source/core/nvigi.api/nvigi_vulkan.h"
@@ -125,7 +129,6 @@ namespace nvigi
             std::string generatorModelPath;
             std::string vocoderModelPath;
             std::string g2pModelPath;
-            std::string phonemesDictPath;
             std::string configPath;
 
             json modelInfo;
@@ -159,7 +162,7 @@ namespace nvigi
 #elif GGML_USE_D3D12
             return plugin::tts::asqflow_ggml::d3d12::kId;
 #else
-            return plugin::tts::asqflow_ggml::cpu::kId;
+			throw nvigi::Exception(nvigi::kResultInvalidState, "No supported backend was enabled at build time");
 #endif
         }
 
@@ -364,16 +367,6 @@ namespace nvigi
                         }
                         pathVocoderModel = file;
                     }
-                    else if (file.find("G2P") != std::string::npos)
-                    {
-                        if (pathg2pModel != "")
-                        {
-                            NVIGI_LOG_ERROR("Multiple G2P models have been found in the directory '%s'",
-                                            parentFolder.c_str());
-                            return kResultInvalidParameter;
-                        }
-                        pathg2pModel = file;
-                    }
                 }
 
                 if (pathGeneratorModel == "")
@@ -386,31 +379,6 @@ namespace nvigi
                     NVIGI_LOG_ERROR("Vocoder model have not been found in the directory '%s'", parentFolder.c_str());
                     return kResultInvalidParameter;
                 }
-                else if (pathg2pModel == "")
-                {
-                    NVIGI_LOG_ERROR("G2P model have not been found in the directory '%s'", parentFolder.c_str());
-                    return kResultInvalidParameter;
-                }
-
-                // Find the path for CMU dictionary (in charge of converting grapheme to phonemes)
-                std::vector<std::string> filesDicts;
-                const std::string nameDictPhonemes = "ipa_dict_phonemized.txt";
-
-                filesDicts = instanceData->modelInfo["txt"];
-                for (const std::string &file : filesDicts)
-                {
-                    if (file.find(nameDictPhonemes) != std::string::npos)
-                    {
-                        pathCMUDict = file;
-                    }
-                }
-
-                if (pathCMUDict == "")
-                {
-                    NVIGI_LOG_ERROR("%s have not been found in the expected directory '%s'", nameDictPhonemes.c_str(),
-                                    parentFolder.c_str());
-                    return kResultInvalidParameter;
-                }
             }
             catch (const std::exception &e)
             {
@@ -420,35 +388,81 @@ namespace nvigi
 
             instanceData->generatorModelPath = pathGeneratorModel;
             instanceData->vocoderModelPath = pathVocoderModel;
-            instanceData->g2pModelPath = pathg2pModel;
-            instanceData->phonemesDictPath = pathCMUDict;
 
             NVIGI_LOG_INFO("Generator model : %s", instanceData->generatorModelPath.c_str());
             NVIGI_LOG_INFO("Vocoder model : %s", instanceData->vocoderModelPath.c_str());
-            NVIGI_LOG_INFO("G2P model : %s", instanceData->g2pModelPath.c_str());
-            NVIGI_LOG_INFO("Phonemes dictionary : %s", instanceData->phonemesDictPath.c_str());
 
             {
 #if GGML_USE_CUDA
                 nvigi::RuntimeContextScope scope(*instanceData);
-#endif
-#ifdef GGML_USE_VULKAN
+
+#elif defined GGML_USE_VULKAN
                 auto vkParams = findStruct<VulkanParameters>(_params);
                 if (vkParams)
                 {
                     ggml_set_vk_params(vkParams->physicalDevice, vkParams->device, vkParams->queue, vkParams->queueCompute, vkParams->queueTransfer,
                                        vkParams->allocateMemoryCallback, vkParams->freeMemoryCallback,
                                        vkParams->allocateMemoryCallbackUserContext, vkParams->freeMemoryCallbackUserContext);
-                }
-#elif GGML_USE_D3D12
-                auto d3d12Params = findStruct<D3D12Parameters>(_params);
+				}
+
+#elif defined GGML_USE_D3D12
+				auto d3d12Params = findStruct<D3D12Parameters>(_params);
                 if (NVIGI_FAILED(res, d3d12::validateParameters(d3d12Params)))
                 {
                     return res;
                 }
+                VendorId vendor{};
+                if (NVIGI_FAILED(res, d3d12::getDeviceVendor(d3d12Params, ctx.isystem, vendor)))
+                {
+                    return res;
+                }
+                if (vendor == VendorId::eNVDA)
+                {
+                    if (!ctx.iscg && !framework::getInterface(plugin::getContext()->framework, plugin::hwi::d3d12::kId, &ctx.iscg))
+                    {
+                        NVIGI_LOG_ERROR("Missing interface from 'nvigi.plugin.hwi.d3d12'");
+                        return kResultInvalidState;
+                    }
+
+                    if (NVIGI_FAILED(res, d3d12::applyNVDASpecificSettings(d3d12Params, ctx.iscg)))
+                    {
+                        return res;
+                    }
+                }
+
+                auto applySchedulingModeCallback = [](ID3D12CommandList* pCommandList, int action)
+                    {
+                        // Don't check iscg and version every call, because we do it once when callback is registered
+                        IHWID3D12* iscg = asqflow::getContext()->iscg;
+                        ID3D12GraphicsCommandList* pGraphicsCommandList = nullptr;
+                        if (SUCCEEDED(pCommandList->QueryInterface<ID3D12GraphicsCommandList>(&pGraphicsCommandList)))
+                        {
+                            iscg->d3d12ApplyGlobalGpuInferenceSchedulingModeToCommandList(pGraphicsCommandList);
+                        }
+                    };
+
+                // Do iscg and version checks now to avoid doing them inside every callback       
+                PFun_commandListAction* CLresetCallback = nullptr;
+                IHWID3D12* iscg = asqflow::getContext()->iscg;
+                if (iscg)
+                {
+                    if (iscg->getVersion() >= 4)
+                    {
+                        CLresetCallback = applySchedulingModeCallback;
+                    }
+                    else
+                    {
+                        NVIGI_LOG_WARN_ONCE("We need version 4 of hwi.d3d12 in order to set D3D12 compute scheduling mode, and version available is %d. Performance may be suboptimal.\n", iscg->getVersion());
+                    }
+                }
+                else
+                {
+                    NVIGI_LOG_WARN_ONCE("hwi.d3d12 was not loaded, so couldn't set D3D12 compute scheduling mode. Performance may be suboptimal.\n");
+                }
+
                 bool allowReBAR = d3d12Params->getVersion() < 3 || !(d3d12Params->flags & nvigi::D3D12ParametersFlags::eDisableReBAR);
                 ggml_d3d12_set_params(d3d12Params->device, d3d12Params->queue, d3d12Params->queueCompute, d3d12Params->queueCopy,
-                                      d3d12Params->createCommittedResourceCallback, d3d12Params->destroyResourceCallback, d3d12Params->createCommitResourceUserContext, d3d12Params->destroyResourceUserContext, allowReBAR);
+                    d3d12Params->createCommittedResourceCallback, d3d12Params->destroyResourceCallback, d3d12Params->createCommitResourceUserContext, d3d12Params->destroyResourceUserContext, allowReBAR, CLresetCallback);
 #endif
 
                 // Initialize pipeline with all models
@@ -456,8 +470,6 @@ namespace nvigi
                 asqflow_pipeline_params pipelineParams = asqflow_pipeline_default_params();
                 pipelineParams.generator_model = instanceData->generatorModelPath.c_str();
                 pipelineParams.vocoder_model = instanceData->vocoderModelPath.c_str();
-                pipelineParams.g2p_model = instanceData->g2pModelPath.c_str();
-                pipelineParams.phonemes_dict = instanceData->phonemesDictPath.c_str();
                 pipelineParams.config_data = config_data_storage.c_str();
 #if GGML_USE_CUDA
                 // Set GPU device
@@ -498,25 +510,6 @@ namespace nvigi
                 if (cuerr != kResultOk)
                 {
                     NVIGI_LOG_WARN_ONCE("Could not set relative priority of compute and graphics. Please use 575 driver or higher\n");
-                }
-            }
-#elif GGML_USE_D3D12
-            VendorId vendor{};
-            if (NVIGI_FAILED(res, d3d12::getDeviceVendor(d3d12Params, ctx.isystem, vendor)))
-            {
-                return res;
-            }
-            if (vendor == VendorId::eNVDA)
-            {
-                if (!ctx.iscg && !framework::getInterface(plugin::getContext()->framework, plugin::hwi::d3d12::kId, &ctx.iscg))
-                {
-                    NVIGI_LOG_ERROR("Missing interface from 'nvigi.plugin.hwi.d3d12'");
-                    return kResultInvalidState;
-                }
-
-                if (NVIGI_FAILED(res, d3d12::applyNVDASpecificSettings(d3d12Params, ctx.iscg)))
-                {
-                    return res;
                 }
             }
 #endif
@@ -564,9 +557,41 @@ namespace nvigi
             return kResultInvalidParameter;
         }
 
-        //// Supported languages (can be extended based on models)
-        // static const char* s_languages[] = { "en" };
-        // info->supportedLanguages = s_languages;
+        //// Supported languages (reading from model configuration)
+        static std::vector<std::string> s_languages;
+        static std::vector<const char*> s_language_ptrs; // Rebuilt from s_languages each time
+        
+        // Clear previous data to allow for dynamic reloading
+        s_languages.clear();
+        s_language_ptrs.clear();
+        
+        // Read languages from model config - this is now the only source of supported languages
+        if (common->modelGUID && ctx.modelInfo.contains(common->modelGUID)) {
+            auto modelConfig = ctx.modelInfo[common->modelGUID];
+            if (modelConfig.contains("languages_supported")) {
+                for (const auto& lang : modelConfig["languages_supported"]) {
+                    if (lang.is_string()) {
+                        s_languages.push_back(lang.get<std::string>());
+                    }
+                }
+                NVIGI_LOG_VERBOSE("Loaded %zu supported languages from model config for model %s", 
+                                 s_languages.size(), common->modelGUID);
+            } else {
+                NVIGI_LOG_VERBOSE("Model config for %s does not contain 'languages_supported' field, defaulting to English", common->modelGUID);
+                s_languages.push_back("en");
+            }
+        } else {
+            NVIGI_LOG_VERBOSE("No valid model GUID provided or model not found in config, defaulting to English");
+            s_languages.push_back("en");
+        }
+        
+        // Build pointer array from string storage
+        for (const auto& lang : s_languages) {
+            s_language_ptrs.push_back(lang.c_str());
+        }
+        
+        info->supportedLanguages = s_language_ptrs.data();
+        info->n_languages = static_cast<uint32_t>(s_languages.size());
 
         // CUDA or CPU backend
 #if defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN) || defined(GGML_USE_D3D12)
@@ -684,11 +709,33 @@ namespace nvigi
         const int dpmpp_order = std::max(std::min(runtime->dpmpp_order, 3), 1);  // Clamp to 1-3 range
         const bool use_flash_attention = runtime->use_flash_attention;
         
+        // Validate and set language parameter
+        std::string language = runtime->language ? runtime->language : "en";
+        
+        // Check if language is supported by the current model
+        bool languageSupported = false;
+        if (instance->modelInfo.contains("languages_supported")) {
+            for (const auto& supportedLang : instance->modelInfo["languages_supported"]) {
+                if (supportedLang.is_string() && supportedLang.get<std::string>() == language) {
+                    languageSupported = true;
+                    break;
+                }
+            }
+        } else {
+            // If no languages_supported field, assume only English is supported
+            languageSupported = (language == "en");
+        }
+        
+        if (!languageSupported) {
+            NVIGI_LOG_ERROR("Language '%s' is not supported by this model.", language.c_str());
+			return nvigi::kResultInvalidParameter;
+        }
+        
         NVIGI_LOG_VERBOSE("Using runtime speed: %f", speechRate);
         NVIGI_LOG_VERBOSE("Using runtime n_timesteps: %d", nTimesteps);
         NVIGI_LOG_VERBOSE("Using runtime minChunkSize: %d, maxChunkSize: %d", minChunkSize, maxChunkSize);
-        NVIGI_LOG_VERBOSE("Using runtime seed: %d, sampler: %d, dpmpp_order: %d, flash_attention: %s", 
-                         seed, sampler, dpmpp_order, use_flash_attention ? "true" : "false");
+        NVIGI_LOG_VERBOSE("Using runtime seed: %d, sampler: %d, dpmpp_order: %d, flash_attention: %s, language: %s", 
+                         seed, sampler, dpmpp_order, use_flash_attention ? "true" : "false", language.c_str());
 
         auto asqflowReturnOutputAudio =
             [execCtx, instance](const std::vector<int16_t> &audio, const std::string &textNormalized,
@@ -761,7 +808,7 @@ namespace nvigi
                 instance->sync.running.store(true);
                 instance->sync.job = std::async(std::launch::async,
                     [execCtx, instance, asqflowReturnOutputAudio, spectrogramPath, speechRate, 
-                     nTimesteps, minChunkSize, maxChunkSize, seed, sampler, dpmpp_order, use_flash_attention]() -> nvigi::Result
+                     nTimesteps, minChunkSize, maxChunkSize, seed, sampler, dpmpp_order, use_flash_attention, language]() -> nvigi::Result
                 {
                     while (instance->sync.running.load() && !instance->promptsToProcess.empty())
                     {
@@ -817,7 +864,8 @@ namespace nvigi
                                     seed,
                                     sampler,
                                     dpmpp_order,
-                                    use_flash_attention
+                                    use_flash_attention,
+                                    language
                                 );
 
                                 if (res != nvigi::kResultOk)
@@ -885,7 +933,8 @@ namespace nvigi
                     seed,      // Random seed
                     sampler,   // Sampler type (0=EULER, 1=DPM++)
                     dpmpp_order, // DPM++ order (1-3)
-                    use_flash_attention // Flash attention flag
+                    use_flash_attention, // Flash attention flag
+					language // Language code (e.g., "en", "es")
                 );
 
                 // If chunking failed or we want to return the complete audio at the end
@@ -908,16 +957,6 @@ namespace nvigi
                 result = kResultInvalidState;
             }
         }
-
-#if GGML_USE_D3D12 && PROFILE_D3D
-        nvtxRangePushA("TTS: Restore D3D priority");
-        nvigi::Result d3derr = ctx.iscg->d3d12RestoreThreadsGpuInferenceSchedulingMode(instance->device);
-        if (d3derr != kResultOk)
-        {
-            NVIGI_LOG_WARN_ONCE("Could not set relative priority of D3D12 compute and graphics. Please use 575 driver or higher\n");
-        }
-        nvtxRangePop();
-#endif
 
 #if GGML_USE_CUDA || (GGML_USE_D3D12 && PROFILE_D3D)
         nvtxRangePop();
@@ -1046,6 +1085,10 @@ namespace nvigi
     }
 #endif
 
+#if defined(GGML_USE_VULKAN) || defined(GGML_USE_D3D12)
+    NVIGI_LOG_WARN("IMPORTANT: D3D12 and Vulkan are experimental backends and may not work or perform as expected!!!");
+#endif
+
         return kResultOk;
     }
 
@@ -1060,7 +1103,7 @@ namespace nvigi
 #if GGML_USE_CUDA
         framework::releaseInterface(plugin::getContext()->framework, plugin::hwi::cuda::kId, ctx.icig);
         ctx.icig = nullptr;
-#elif GGML_USE_D3D12
+#elif defined(GGML_USE_D3D12)
     framework::releaseInterface(plugin::getContext()->framework, plugin::hwi::d3d12::kId, ctx.iscg);
     ctx.iscg = nullptr;
     framework::releaseInterface(plugin::getContext()->framework, nvigi::core::framework::kId, ctx.isystem);

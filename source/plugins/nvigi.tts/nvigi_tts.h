@@ -88,10 +88,16 @@ NVIGI_VALIDATE_STRUCT(TTSASqFlowCreationParameters);
 struct alignas(8) TTSCapabilitiesAndRequirements
 {
     TTSCapabilitiesAndRequirements() {};
-    NVIGI_UID(UID({0xf7359a0a, 0x5387, 0x47d6, {0xbc, 0xa4, 0xbb, 0x6c, 0xef, 0xd4, 0x17, 0x2b}}), kStructVersion1);
+    NVIGI_UID(UID({0xf7359a0a, 0x5387, 0x47d6, {0xbc, 0xa4, 0xbb, 0x6c, 0xef, 0xd4, 0x17, 0x2b}}), kStructVersion2);
     CommonCapabilitiesAndRequirements *common;
     // Unused
     const char** speakers{};
+
+    //! v2+ members go here, remember to update the kStructVersionN in the above NVIGI_UID macro!
+    
+    // Only for GGML backend
+    const char** supportedLanguages;
+    uint32_t n_languages;
 };
 
 NVIGI_VALIDATE_STRUCT(TTSCapabilitiesAndRequirements);
@@ -102,7 +108,7 @@ NVIGI_VALIDATE_STRUCT(TTSCapabilitiesAndRequirements);
 struct alignas(8) TTSASqFlowRuntimeParameters
 {
     TTSASqFlowRuntimeParameters() {};
-    NVIGI_UID(UID({ 0x41ed9dcb, 0x0ac3, 0x41c0, {0xad, 0xe3, 0xab, 0xbe, 0xeb, 0x05, 0x68, 0xc7} }), kStructVersion3)
+    NVIGI_UID(UID({ 0x41ed9dcb, 0x0ac3, 0x41c0, {0xad, 0xe3, 0xab, 0xbe, 0xeb, 0x05, 0x68, 0xc7} }), kStructVersion4)
     //! v1 members go here, please do NOT break the C ABI compatibility:
 
     //! * do not use virtual functions, volatile, STL (e.g. std::vector) or any other C++ high level functionality
@@ -142,6 +148,12 @@ struct alignas(8) TTSASqFlowRuntimeParameters
 
     // Enable flash attention for better performance
     bool use_flash_attention = true; //Only for GGML backend
+
+    //! v4+ members go here
+    // Language code for input text
+    // Works only with GGML plugin currently
+    // Supported languages: "en", "en-us", "en-uk", "es", "de"
+    const char* language = "en"; // Default to English
 };
 
 NVIGI_VALIDATE_STRUCT(TTSASqFlowRuntimeParameters)

@@ -9,10 +9,6 @@
 namespace nvigi
 {
 
-struct ASRCreationParameters;
-struct GPTCreationParameters;
-struct Audio2FaceCreationParameters;
-
 namespace plugin
 {
 namespace ai::pipeline

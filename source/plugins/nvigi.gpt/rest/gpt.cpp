@@ -19,7 +19,6 @@
 #include "_artifacts/gitVersion.h"
 
 #include "source/plugins/nvigi.gpt/rest/gpt.h"
-//#include "source/plugins/nvigi.imgui/imgui.h"
 
 namespace nvigi
 {

@@ -6,9 +6,11 @@ copy external\cuda\bin\cudart64_12.dll bin\x64\
 copy external\vulkanSDK\Bin\dxcompiler.dll bin\x64\
 copy external\vulkanSDK\Bin\dxcompiler.dll bin\x64\
 copy external\zlib\bin\zlib1.dll bin\x64\
+copy external\zlib\debug\bin\zlibd1.dll bin\x64\
 copy external\openssl\bin\libssl-3-x64.dll bin\x64\
 copy external\openssl\bin\libcrypto-3-x64.dll bin\x64\
 copy external\zlib\bin\zlib1.dll bin\x64\
+copy external\zlib\debug\bin\zlibd1.dll bin\x64\
 copy external\openssl\bin\libssl-3-x64.dll bin\x64\
 copy external\openssl\bin\libcrypto-3-x64.dll bin\x64\
 copy external\microsoft.ml.onnxruntime.directml.1.20.1\runtimes\win-x64\native\onnxruntime.dll bin\x64\
@@ -29,9 +31,11 @@ copy external\cuda\bin\cudart64_12.dll bin\x64\
 copy external\vulkanSDK\Bin\dxcompiler.dll bin\x64\
 copy external\vulkanSDK\Bin\dxcompiler.dll bin\x64\
 copy external\zlib\bin\zlib1.dll bin\x64\
+copy external\zlib\debug\bin\zlibd1.dll bin\x64\
 copy external\openssl\bin\libssl-3-x64.dll bin\x64\
 copy external\openssl\bin\libcrypto-3-x64.dll bin\x64\
 copy external\zlib\bin\zlib1.dll bin\x64\
+copy external\zlib\debug\bin\zlibd1.dll bin\x64\
 copy external\openssl\bin\libssl-3-x64.dll bin\x64\
 copy external\openssl\bin\libcrypto-3-x64.dll bin\x64\
 copy external\microsoft.ml.onnxruntime.directml.1.20.1\runtimes\win-x64\native\onnxruntime.dll bin\x64\

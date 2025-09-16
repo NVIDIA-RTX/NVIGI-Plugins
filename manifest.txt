@@ -1,30 +1,100 @@
 	nvigi-sdk-source/.gitattributes
 	nvigi-sdk-source/.gitignore
-	nvigi-sdk-source/3rd-party-licenses.md
 	nvigi-sdk-source/LICENSE.txt
 	nvigi-sdk-source/NOTICE.txt
-	nvigi-sdk-source/README.md
 	nvigi-sdk-source/build.bat
 	nvigi-sdk-source/copy_sdk_binaries.bat
 	nvigi-sdk-source/setup.bat
 	nvigi-sdk-source\_artifacts/gitVersion.h
-	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.asr.ggml\{5CAD3A03-1272-4D43-9F3D-655417526170}/download.bat
-	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.asr.ggml\{5CAD3A03-1272-4D43-9F3D-655417526170}/nvigi.model.config.json
-	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.embed.ggml\{5D458A64-C62E-4A9C-9086-2ADBF6B241C7}/download.bat
-	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.embed.ggml\{5D458A64-C62E-4A9C-9086-2ADBF6B241C7}/nvigi.model.config.json
-	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.cloud\{01F43B70-CE23-42CA-9606-74E80C5ED0B6}/nvigi.model.config.json
-	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.cloud\{8E31808B-C182-4016-9ED8-64804FF5B40D}/nvigi.model.config.json
-	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.cloud\{E9102ACB-8CD8-4345-BCBF-CCF6DC758E58}/nvigi.model.config.json
-	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.ggml\{01F43B70-CE23-42CA-9606-74E80C5ED0B6}/download.bat
-	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.ggml\{01F43B70-CE23-42CA-9606-74E80C5ED0B6}/nvigi.model.config.json
-	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.ggml\{0BAEDD5C-F2CA-49AA-9892-621C40030D12}/README.txt
-	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.ggml\{0BAEDD5C-F2CA-49AA-9892-621C40030D12}/nvigi.model.config.json
-	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.ggml\{0BAEDD5C-F2CA-49AA-9892-621C40030D13}/README.txt
-	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.ggml\{0BAEDD5C-F2CA-49AA-9892-621C40030D13}/nvigi.model.config.json
-	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.ggml\{8E31808B-C182-4016-9ED8-64804FF5B40D}/download.bat
-	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.gpt.ggml\{8E31808B-C182-4016-9ED8-64804FF5B40D}/nvigi.model.config.json
-	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.tts.asqflow-ggml\{90D81B98-0954-4D64-B901-B4F7A3189DEC}/nvigi.model.config.json
-	nvigi-sdk-source\data\nvigi.models\nvigi.plugin.tts.asqflow-trt\{81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F}/nvigi.model.config.json
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d/nvidia-logo.png
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d/sponza-plus.scene.json
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\fonts\DroidSans/Apache License.txt
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\fonts\DroidSans/DroidSans-Mono.ttf
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\fonts\OpenSans/Apache License.txt
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\fonts\OpenSans/OpenSans-Regular.ttf
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models/generate-index.py
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\BrainStem/README.md
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\BrainStem\glTF/BrainStem.gltf
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\BrainStem\glTF/BrainStem0.bin
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\BrainStem\glTF-Binary/BrainStem.glb
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\BrainStem\glTF-Draco/BrainStem.gltf
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\BrainStem\glTF-Draco/BrainStem0.bin
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\BrainStem\glTF-Embedded/BrainStem.gltf
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\BrainStem\screenshot/screenshot.gif
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza/README.md
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/10381718147657362067.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/10388182081421875623.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/11474523244911310074.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/11490520546946913238.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/11872827283454512094.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/11968150294050148237.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/1219024358953944284.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/12501374198249454378.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/13196865903111448057.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/13824894030729245199.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/13982482287905699490.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/14118779221266351425.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/14170708867020035030.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/14267839433702832875.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/14650633544276105767.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/15295713303328085182.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/15722799267630235092.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/16275776544635328252.png
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/16299174074766089871.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/16885566240357350108.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/17556969131407844942.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/17876391417123941155.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/2051777328469649772.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/2185409758123873465.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/2299742237651021498.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/2374361008830720677.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/2411100444841994089.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/2775690330959970771.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/2969916736137545357.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/332936164838540657.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/3371964815757888145.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/3455394979645218238.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/3628158980083700836.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/3827035219084910048.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/4477655471536070370.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/4601176305987539675.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/466164707995436622.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/4675343432951571524.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/4871783166746854860.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/4910669866631290573.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/4975155472559461469.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/5061699253647017043.png
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/5792855332885324923.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/5823059166183034438.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/6047387724914829168.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/6151467286084645207.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/6593109234861095314.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/6667038893015345571.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/6772804448157695701.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/7056944414013900257.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/715093869573992647.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/7268504077753552595.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/7441062115984513793.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/755318871556304029.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/759203620573749278.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/7645212358685992005.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/7815564343179553343.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/8006627369776289000.png
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/8051790464816141987.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/8114461559286000061.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/8481240838833932244.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/8503262930880235456.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/8747919177698443163.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/8750083169368950601.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/8773302468495022225.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/8783994986360286082.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/9288698199695299068.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/9916269861720640319.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/Sponza.bin
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/Sponza.gltf
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\glTF/white.png
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\screenshot/large.jpg
+	nvigi-sdk-source\data\nvigi.test\nvigi.3d\glTF-Sample-Models\2.0\Sponza\screenshot/screenshot.jpg
 	nvigi-sdk-source\data\nvigi.test\nvigi.asr/jfk.wav
 	nvigi-sdk-source\data\nvigi.test\nvigi.asr/micro-machines.wav
 	nvigi-sdk-source\data\nvigi.test\nvigi.asr/whisper-stream-test.wav
@@ -38,15 +108,26 @@
 	nvigi-sdk-source\data\nvigi.test\nvigi.tts\asqflow\mel_spectrograms_targets/Claire_neutral_8s_se.bin
 	nvigi-sdk-source\data\nvigi.test\nvigi.tts\asqflow\mel_spectrograms_targets/Claire_sadness_8s_se.bin
 	nvigi-sdk-source\data\nvigi.test\nvigi.tts\asqflow\mel_spectrograms_targets/transcripts.json
-	nvigi-sdk-source\docs/CustomizingPlugins.md
+	nvigi-sdk-source\docs/3rd-party-licenses.md
+	nvigi-sdk-source\docs/GettingStarted.md
+	nvigi-sdk-source\docs/NVIGIDeveloperPack.md
+	nvigi-sdk-source\docs/Plugins.md
 	nvigi-sdk-source\docs/ProgrammingGuideASRWhisper.md
 	nvigi-sdk-source\docs/ProgrammingGuideEmbed.md
 	nvigi-sdk-source\docs/ProgrammingGuideGPT.md
 	nvigi-sdk-source\docs/ProgrammingGuideTTSASqFlow.md
 	nvigi-sdk-source\docs/Samples.md
+	nvigi-sdk-source\docs/SourceBuild.md
 	nvigi-sdk-source\docs\media/ASqFlowSolution.png
+	nvigi-sdk-source\docs\media/app_settings_fps_ui.png
+	nvigi-sdk-source\docs\media/app_settings_ui.png
+	nvigi-sdk-source\docs\media/auto_settings_dropdown.png
+	nvigi-sdk-source\docs\media/auto_settings_ui.png
 	nvigi-sdk-source\docs\media/guid-1.png
 	nvigi-sdk-source\docs\media/guid.png
+	nvigi-sdk-source\docs\media/main_ui.png
+	nvigi-sdk-source\docs\media/manual_settings_dropdown.png
+	nvigi-sdk-source\docs\media/maual_settings_ui.png
 	nvigi-sdk-source\premake/premake.cuda_utils.lua
 	nvigi-sdk-source\premake/premake.shared_config.lua
 	nvigi-sdk-source\premake/premake.shared_plugin.lua
@@ -115,8 +196,30 @@
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt\external_trt/README.md
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt\external_trt/TRTModel.h
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt\external_trt/TRTTensor.h
+	nvigi-sdk-source\source\samples\nvigi.3d/.gitattributes
+	nvigi-sdk-source\source\samples\nvigi.3d/.gitignore
+	nvigi-sdk-source\source\samples\nvigi.3d/premake.lua
+	nvigi-sdk-source\source\samples\nvigi.3d\opt-local-donut/.gitignore
+	nvigi-sdk-source\source\samples\nvigi.3d\opt-local-donut/01_pull.bat
+	nvigi-sdk-source\source\samples\nvigi.3d\opt-local-donut/02_setup.bat
+	nvigi-sdk-source\source\samples\nvigi.3d\opt-local-donut/03_build.bat
+	nvigi-sdk-source\source\samples\nvigi.3d\opt-local-donut/CMakeLists.txt
+	nvigi-sdk-source\source\samples\nvigi.3d\src/NVIGISample.cpp
+	nvigi-sdk-source\source\samples\nvigi.3d\src/NVIGISample.h
+	nvigi-sdk-source\source\samples\nvigi.3d\src/RenderTargets.h
+	nvigi-sdk-source\source\samples\nvigi.3d\src/UIData.h
+	nvigi-sdk-source\source\samples\nvigi.3d\src/UIRenderer.h
+	nvigi-sdk-source\source\samples\nvigi.3d\src/main.cpp
+	nvigi-sdk-source\source\samples\nvigi.3d\src\DeviceManagerOverride/DeviceManagerOverride_VK.cpp
+	nvigi-sdk-source\source\samples\nvigi.3d\src\nvigi/AudioRecordingHelper.cpp
+	nvigi-sdk-source\source\samples\nvigi.3d\src\nvigi/AudioRecordingHelper.h
+	nvigi-sdk-source\source\samples\nvigi.3d\src\nvigi/AudioToBytes.h
+	nvigi-sdk-source\source\samples\nvigi.3d\src\nvigi/NVIGIContext.cpp
+	nvigi-sdk-source\source\samples\nvigi.3d\src\nvigi/NVIGIContext.h
 	nvigi-sdk-source\source\samples\nvigi.basic/basic.cpp
 	nvigi-sdk-source\source\samples\nvigi.basic/premake.lua
+	nvigi-sdk-source\source\samples\nvigi.fcall/fcall.cpp
+	nvigi-sdk-source\source\samples\nvigi.fcall/premake.lua
 	nvigi-sdk-source\source\samples\nvigi.pipeline/pipeline.cpp
 	nvigi-sdk-source\source\samples\nvigi.pipeline/premake.lua
 	nvigi-sdk-source\source\samples\nvigi.rag/premake.lua

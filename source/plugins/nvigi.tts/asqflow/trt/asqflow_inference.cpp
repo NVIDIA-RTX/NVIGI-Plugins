@@ -29,14 +29,14 @@
 #include <utility>
 #include <vector>
 
-#define CHECK(expr)                                                                                                    \
-    do                                                                                                                 \
-    {                                                                                                                  \
-        if (!(expr))                                                                                                   \
-        {                                                                                                              \
-            std::cerr << "Error: CHECK failed in " << __FILE__ << " at line " << __LINE__ << ": " << #expr             \
-                      << " returned false." << std::endl;                                                              \
-        }                                                                                                              \
+#define TRT_CHECK(expr)                                                                                           \
+    do                                                                                                                \
+    {                                                                                                                 \
+        if (!(expr))                                                                                                  \
+        {                                                                                                             \
+            NVIGI_LOG_ERROR("Error: TRT_CHECK failed in %s at line %d: %s returned false.", __FILE__, __LINE__, #expr); \
+            throw std::runtime_error("Error: TRT_CHECK failed in " __FILE__ " at line " + std::to_string(__LINE__) + ": " #expr " returned false."); \
+        }                                                                                                             \
     } while (0)
 
 using shape_vec_t = std::vector<size_t>;
@@ -194,15 +194,15 @@ nvigi::Result ASqFlow::runDpModel(std::vector<int> &phonemesEncoding, std::vecto
     try
     {
         // inference setup: set input shapes & IO buffer address
-        CHECK(dpModel.setInputShapes(inputShapeMap));
-        CHECK(dpModel.setIOBuffers(ioBufferMap));
+        TRT_CHECK(dpModel.setInputShapes(inputShapeMap));
+        TRT_CHECK(dpModel.setIOBuffers(ioBufferMap));
 
         // synchronous inference
-        CHECK(dpModel.execute(cudaStream));
+        TRT_CHECK(dpModel.execute(cudaStream));
 
         // copy output to host and dump as npy array
 
-        CHECK(outputTensor.copyToHost(&outputDpVal));
+        TRT_CHECK(outputTensor.copyToHost(&outputDpVal));
         NVIGI_LOG_INFO("DP predicted : %d", outputDpVal);
     }
     catch (const std::exception &e)
@@ -300,7 +300,7 @@ nvigi::Result ASqFlow::runGeneratorModel(std::vector<int> &phonemesEncoding, std
     // TRT inference
     try
     {
-        CHECK(generatorModel.setInputShapes(inputShapeMap));
+        TRT_CHECK(generatorModel.setInputShapes(inputShapeMap));
         // Prepare output names and execute inference
         for (int i = 0; i < nTimeSteps; i++)
         {
@@ -317,16 +317,16 @@ nvigi::Result ASqFlow::runGeneratorModel(std::vector<int> &phonemesEncoding, std
                                         {"language_id", languageIdTensor.getDevicePtr()},
                                         {"i_timestep", iTimeStepTensor.getDevicePtr()},
                                         {"output", yOutTensor.getDevicePtr()}};
-            CHECK(generatorModel.setIOBuffers(ioBufferMap));
+            TRT_CHECK(generatorModel.setIOBuffers(ioBufferMap));
 
             // synchronous inference
-            CHECK(generatorModel.execute(cudaStream));
+            TRT_CHECK(generatorModel.execute(cudaStream));
 
-            CHECK(yOutTensor.copyDeviceToDevice(yInTensor.getDevicePtr()));
+            TRT_CHECK(yOutTensor.copyDeviceToDevice(yInTensor.getDevicePtr()));
         }
 
         // copy output to host
-        CHECK(yOutTensor.copyToHost(yOut.data()));
+        TRT_CHECK(yOutTensor.copyToHost(yOut.data()));
 
         unsigned int indexOutputMel = 0;
         unsigned int yLen = yDpPrediction + melSpectrogramRefLen;
@@ -395,10 +395,10 @@ nvigi::Result ASqFlow::runVocoderModel(std::vector<__half> &melSpectrogram, std:
     try
     {
 
-        CHECK(vocoderModel.setIOBuffers(ioBufferMap));
+        TRT_CHECK(vocoderModel.setIOBuffers(ioBufferMap));
 
         // synchronous inference
-        CHECK(vocoderModel.execute(cudaStream));
+        TRT_CHECK(vocoderModel.execute(cudaStream));
         outputAudioTensor.copyToHost(outputAudioFloat16.data());
 
         outputAudio.clear();

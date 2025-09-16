@@ -150,7 +150,15 @@ namespace nvigi
             return true;
         }
 
-        std::string get_target_transcript(const std::string& spectrogram_path) {
+        struct TranscriptInfo {
+            std::string text;
+            std::string language;
+        };
+
+        // NOTE: Supported languages are now read dynamically from model configuration files.
+        // Use capabilities and requirements API to query the actual supported languages for your model.
+
+        TranscriptInfo get_target_transcript(const std::string& spectrogram_path) {
             try {
                 // Get the directory and filename from spectrogram path
                 std::filesystem::path spec_path(spectrogram_path);
@@ -165,14 +173,14 @@ namespace nvigi
                 // Check if transcript.json exists
                 if (!std::filesystem::exists(transcript_path)) {
                     NVIGI_LOG_WARN("transcripts.json not found in %s", spec_dir.string().c_str());
-                    return "";
+                    return {"", ""};
                 }
                 
                 // Read and parse the JSON file
                 std::ifstream json_file(transcript_path);
                 if (!json_file.is_open()) {
                     NVIGI_LOG_WARN("Cannot open transcripts.json file");
-                    return "";
+                    return {"", ""};
                 }
                 
                 json transcript_json;
@@ -181,11 +189,22 @@ namespace nvigi
                 
                 // Look for the transcript using the spectrogram filename as key
                 std::string target_transcript = "";
+                std::string target_language = "";
                 std::string key = spec_path.stem().string(); // Remove file extension
-                if (transcript_json.contains(spec_path.stem().string())) {
-                    if (transcript_json[key].is_string()) {
-                        target_transcript = transcript_json[key].get<std::string>();
-                        NVIGI_LOG_VERBOSE("Found transcript for key '%s': %s", key.c_str(), target_transcript.c_str());
+                if (transcript_json.contains(key)) {
+                    auto transcriptEntry = transcript_json[key];
+                    if (transcriptEntry.is_object() && transcriptEntry.contains("text")) {
+                        // New format with "text" and "language" fields
+                        target_transcript = transcriptEntry["text"].get<std::string>();
+                        if (transcriptEntry.contains("language")) {
+                            target_language = transcriptEntry["language"].get<std::string>();                      
+                        } else {
+                            NVIGI_LOG_VERBOSE("Found transcript for key '%s': %s", key.c_str(), target_transcript.c_str());
+                        }
+                    } else if (transcriptEntry.is_string()) {
+                        // Backwards compatibility for old format
+                        target_transcript = transcriptEntry.get<std::string>();
+                        NVIGI_LOG_VERBOSE("Found transcript for key '%s' (legacy format): %s", key.c_str(), target_transcript.c_str());
                     }
                 }
                 
@@ -198,11 +217,11 @@ namespace nvigi
                     NVIGI_LOG_WARN("%s", available_keys.c_str());
                 }
                 
-                return target_transcript;
+                return {target_transcript, target_language};
                 
             } catch (const std::exception& e) {
                 NVIGI_LOG_ERROR("Error reading transcript.json: %s", e.what());
-                return "";
+                return {"", ""};
             }
         }
 
@@ -293,7 +312,8 @@ namespace nvigi
             int seed = -725171668,
             int sampler = 1,  // 0 = EULER, 1 = DPM_SOLVER_PLUS_PLUS
             int dpmpp_order = 2,
-            bool use_flash_attention = true
+            bool use_flash_attention = true,
+            const std::string& language = "en"  // Language parameter for inference
         )
         {
             if (!pipeline)
@@ -302,14 +322,21 @@ namespace nvigi
                 return kResultInvalidParameter;
             }
 
+            // Log the language being used (validation is now done at runtime by the model)
+            NVIGI_LOG_VERBOSE("Using language '%s' for TTS inference", language.c_str());
+
             try
             {
-                // Get target transcript from the spectrogram path
-                std::string targetTranscript = get_target_transcript(spectrogramPath);
+                // Get target transcript and language from the spectrogram path
+                TranscriptInfo transcriptInfo = get_target_transcript(spectrogramPath);
                 
-                if (!targetTranscript.empty())
+                if (!transcriptInfo.text.empty())
                 {
-                    NVIGI_LOG_INFO("Using target transcript: '%s'", targetTranscript.c_str());
+                    NVIGI_LOG_INFO("Using target transcript: '%s'", transcriptInfo.text.c_str());
+                    if (!transcriptInfo.language.empty())
+                    {
+                        NVIGI_LOG_INFO("Target transcript language: '%s'", transcriptInfo.language.c_str());
+                    }
                 }
                 else
                 {
@@ -325,7 +352,7 @@ namespace nvigi
                 // Set up pipeline parameters for inference with chunking
                 asqflow_pipeline_params params = asqflow_pipeline_default_params();
                 params.input_text = inputText.c_str();
-                params.target_transcript = targetTranscript.c_str();
+                params.target_transcript = transcriptInfo.text.c_str();
                 params.spectrogram_path = spectrogramPath.c_str();
                 params.speed = speechRate;
                 params.n_timesteps = nTimesteps;
@@ -333,6 +360,17 @@ namespace nvigi
                 params.sampler = static_cast<asqflow_sampler_type>(sampler);
                 params.dpmpp_order = dpmpp_order;
                 params.use_flash_attention = use_flash_attention;
+                
+                // Set language parameters
+                params.language = language.c_str();
+                if (!transcriptInfo.language.empty())
+                {
+                    params.target_transcript_language = transcriptInfo.language.c_str();
+                }
+                else
+                {
+                    params.target_transcript_language = language.c_str(); // Default to same as input language
+                }
                 
                 // Configure chunking parameters
                 params.enable_chunking = enableChunking;

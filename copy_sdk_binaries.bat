@@ -26,6 +26,13 @@ for /D %%b in ("_artifacts\*") do (
     )
 )
 
+REM Custom for nvigi.3d
+for %%c in ("_artifacts\nvigi.3d\%Cfg%_x64\tts\*.*") do (
+    copy %%c bin\x64\
+)
+
+robocopy /s _artifacts\nvigi.3d\%Cfg%_x64\shaders bin\x64\shaders
+
 if not exist "source\plugins" goto :eof
 
 echo Copying Plugin Headers

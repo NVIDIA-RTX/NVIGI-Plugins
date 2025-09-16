@@ -3,9 +3,9 @@
 
 The focus of this guide is on using In-Game Inferencing to integrate a GPT model into an application. One example would be [Meta Llama2](https://llama.meta.com)
 
-Please read the `docs/ProgrammingGuideAI.md` :only:`binary_pack:([Which may be found here in combined binary packs](../../../nvigi_core/docs/ProgrammingGuideAI.md))` located in the NVIGI Core package to learn more about overall AI inference API in NVIGI SDK.
+Please read the [Programming Guide for AI](nvigi_core/docs/ProgrammingGuideAI.md) located in the NVIGI Core package to learn more about overall AI inference API in NVIGI SDK.
 
-> **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the SDK's Basic command line sample [Source Code](../source/samples/nvigi.basic/basic.cpp) and [Docs](../docs/Samples.md).  The Basic command-line sample includes use of the GPT plugins to respond to text queries.
+> **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the SDK's Basic command line sample [Source Code](../source/samples/nvigi.basic/basic.cpp) and [Docs](Samples.md).  The Basic command-line sample includes use of the GPT plugins to respond to text queries.
 
 > **NOTE** The NVIGI code currently uses the now-outdated term "General Purpose Transformer" for Generative Pre-Trained Transformers in its headers/classes/types.  This will be rectified in a coming release.
 
@@ -19,7 +19,7 @@ Please read the `docs/ProgrammingGuideAI.md` :only:`binary_pack:([Which may be f
 
 ## 1.0 INITIALIZE AND SHUTDOWN
 
-Please read the `docs/ProgrammingGuide.md`  :only:`binary_pack:([Which may be found here in combined binary packs](../../../nvigi_core/docs/ProgrammingGuide.md))` located in the NVIGI Core package to learn more about initializing and shutting down NVIGI SDK. 
+Please read the [Programming Guide](nvigi_core/docs/ProgrammingGuide.md) located in the NVIGI Core package to learn more about initializing and shutting down NVIGI SDK. 
 
 ## 2.0 OBTAIN GPT INTERFACE(S)
 
@@ -590,6 +590,131 @@ stbi_image_free(rgb_data);
 
 If no image is passed in, the VLM will still function as a typical LLM.
 
+## 10.0 LORA
+
+LORAs are small, lightweight adapters that can be applied to a base model to efficiently change the base model behavior.
+
+### Training
+
+
+Training is beyond the scope of this document, though you can look to documents like [unsloth's fine tuning llm guide](https://docs.unsloth.ai/get-started/fine-tuning-llms-guide/lora-hyperparameters-guide) for examples of how to create a LORA.
+
+### Setting up the model.config.json
+
+In the root json, have a "loras" key that is a list of dictionaries, with "name", "filename", and "vram" keys, like so:
+
+```json
+{
+  "name": "llama-3-8b-instruct",
+  "vram": 5280,
+  "n_layers": 33,  
+  "prompt_template": [...
+  ],
+  "turn_template": [...
+  ],
+  "model":
+  {
+    ...
+  },
+  "loras":
+  [
+      {
+          "name" : "mylora1",
+          "filename" : "mylora1.lora",
+          "vram" : 344
+      },
+      {
+          "name" : "mylora2",
+          "filename" : "smaller_lora.lora",
+          "vram" : 163
+      },
+  ]
+}
+```
+
+Loras are gguf files but we rename them to a .lora extension as to not collide with the model files they are based off of.  The .lora files should go in the same folder guid as the model they modify.  So if these loras were trained off of the llama-3-8B instruct located at GUID {D5E8DEB3-28C2-4B9E-9412-B9A012B23584}, the loras would go in
+
+```
+nvigi.models\nvigi.plugin.gpt.ggml\{D5E8DEB3-28C2-4B9E-9412-B9A012B23584}
+    Meta-Llama-3-8B-Instruct.Q4_K_M.gguf
+    mylora1.lora
+    smaller_lora.lora
+```
+
+Then in the code, you will reference the loras by the name key.
+
+### Preparing a model for a lora in GPT Creation
+
+There are three new parameters that allow you to set up your loras:
+
+```cpp
+    size_t numLoras{};          
+    const char** loraNames{};   
+    const float* loraScales{};
+```
+
+numLoras should be the size of the two following arrays, which should be the same length.
+loraNames are the loras you wish to load.
+loraScales are the strengths you want the loras to come in at, between 0 and 1.
+
+scales default to 0 (deactivated), but you can either set this scale at creation time and forget it, or you can wait until you call evaluate and set them in your GPTRuntimeParameters.
+
+In code, that looks like this:
+
+```cpp
+nvigi::GPTCreationParameters params1{};
+
+const char* loraNames[] = { "mylora1", "mylora2" }
+float loraScales[] = { 1.0f, 0.5f };
+
+params1.numLoras = 2;
+params1.loraNames = loraNames;
+params1.loraScales = loraScales;
+```
+
+NOTE: references will be held to the loraNames and loraScales arrays, so it is essential that their lifetime exceeds the runtime of your plugin.  Plan accordingly.
+
+### Changing LORA values at Runtime
+
+The same values that exist in GPTCreationParameters also exist in GPTRuntimeParameters, but instead of preparing and loading the LORAs, the values here allow for modification of the strength of the LORA at runtime.  This is predominantly for turning on and off LORAs, though be warned, this will still require a weight reload, so it's not completely free.
+
+```cpp
+    size_t numLoras{};          
+    const char** loraNames{};   
+    const float* loraScales{};
+```
+
+When preparing for your evaluate calls, the code looks very similar to the creation
+
+```cpp
+nvigi::GPTRuntimeParameters runtime{};
+
+const char* loraNames[] = { "mylora1", "mylora2" }
+float loraScales[] = { 0.0f, 1.0f };
+
+runtime.numLoras = 2;
+runtime.loraNames = loraNames;
+runtime.loraScales = loraScales;
+```
+
+In this case, mylora1 is loaded, but turned off, and mylora2 is loaded at full strength.
+
+This following should turn off the mylora2 and set mylora1 to full strength (since mylora2 is missing, it is implicitly not applied)
+
+```cpp
+nvigi::GPTRuntimeParameters runtime{};
+
+const char* loraNames[] = { "mylora1" }
+float loraScales[] = { 1.0f };
+
+runtime.numLoras = 1;
+runtime.loraNames = loraNames;
+runtime.loraScales = loraScales;
+```
+
+As during creation, the loraNames and loraScales lifetime must exceed the duration of the evaluate call before they can be properly disposed of.
+
+Creation must always happen, as bookkeeping occurs to prepare for referencing loras, but the runtime modifications are only necessary if you intend to change the weighting of the loras dynamically per evaluate call.
 
 ## APPENDIX
 
@@ -621,31 +746,6 @@ The additional benefit of including the latest Agility SDK is the performance en
 > IMPORTANT: Please note that on some systems ReBAR must be explicitly enabled in the BIOS.
 
 In addition to the above, it is also required to distribute `dxcompiler.dll` with your application.
-
-##### D3D12 BATCH SIZE LIMITATION
-
-The D3D12 backend has a default batch size limitation of 8 for certain models to ensure stability and compatibility. This limitation is automatically applied during instance creation and runtime parameter setup.
-
-If your application requires larger batch sizes and you have verified that your specific model works correctly with larger batches, you can override this limitation by adding the following configuration to your model's JSON configuration file:
-
-```json
-{
-    "allow_batch_size_change": true
-}
-```
-
-When this flag is set to `true`, the D3D12 backend will respect the batch size specified in your `CommonCreationParameters` or `GPTRuntimeParameters` without applying the default limit of 8.
-
-**Example model configuration:**
-```json
-{
-    "model_name": "your_model_name",
-    "allow_batch_size_change": true,
-    "other_model_parameters": "..."
-}
-```
-
-> **WARNING**: Enabling larger batch sizes may cause instability or crashes with certain models on the D3D12 backend. Always test thoroughly with your specific model and hardware configuration before using this override in production environments.
 
 #### VULKAN
 

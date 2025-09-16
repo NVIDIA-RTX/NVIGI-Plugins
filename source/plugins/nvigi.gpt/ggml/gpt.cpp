@@ -19,7 +19,6 @@
 #include "_artifacts/gitVersion.h"
 
 #include "source/plugins/nvigi.gpt/ggml/gpt.h"
-//#include "source/plugins/nvigi.imgui/imgui.h"
 
 #include "log.h"
 
@@ -145,6 +144,16 @@ struct InferenceContext
 #ifndef NVIGI_GPT_GFN_NVCF
     common_init_result llamaContext{};
     clip_ctx* clipContext{};
+
+    // IGI manages lora adapters itself, similiarly to the way LlamaCPP does.
+    // This added complexity allows us to switch scales of loras per evaluate call
+    // which LlamaCPP typically does not provide a mechanism for.
+    struct igi_adapter_lora_info
+    {
+        std::string loraPath;
+        llama_adapter_lora_ptr ptr;
+    };
+    std::unordered_map<std::string, igi_adapter_lora_info> lora_adapters;
 #endif
 
 #if GGML_USE_CUBLAS
@@ -189,6 +198,9 @@ PluginID getFeatureId(InferenceInstanceData* data)
 
 void igiProcessChatTemplate(bool shouldProcessChatTemplate, nvigi::gpt::InferenceContext* instance, const std::string& system, const std::string& user, const std::string& assistant)
 {
+    instance->params.prompt = "";
+    instance->params.system_prompt = "";
+    instance->params.enable_chat_template = false; // default to false, we will set it to true if we need to process the chat template
     if (shouldProcessChatTemplate)
     {
         // user wants us to process it - so we need to determine if we have IGI of LlamaCPP do it.
@@ -197,13 +209,12 @@ void igiProcessChatTemplate(bool shouldProcessChatTemplate, nvigi::gpt::Inferenc
         {
             // igi will do it from the config.json prompt_template and turn_template values.
             instance->params.prompt = ai::generatePrompt(instance->modelInfo, system, user, assistant);
-            instance->params.enable_chat_template = false;
         }
         else
         {
             // llamacpp will handle it inside gpt.h generate
-            instance->params.prompt = system;
-            instance->params.prompt += user;
+            instance->params.system_prompt = system;
+            instance->params.prompt = user;
             instance->params.enable_chat_template = true;
         }
     }
@@ -213,8 +224,8 @@ void igiProcessChatTemplate(bool shouldProcessChatTemplate, nvigi::gpt::Inferenc
         // to send in both a system and a user string in "raw" mode.  It's generally advisable to send in one or the other and simply parameterize them appropriately.
         // assumption here is that if the user has _not_ passed one of the two in, that entry will be an empty string, so a no-op below.
         // This does get the user as close to the metal as possible to test for problems in a way they can control.
-        instance->params.prompt = system;
-        instance->params.prompt += user;
+        instance->params.system_prompt = system;
+        instance->params.prompt = user;
     }
 }
 
@@ -521,16 +532,6 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
         auto platform = "ggml.vulkan";
 #elif defined(GGML_USE_D3D12)
         auto platform = "ggml.d3d12";
-        bool allow_batch_size_change = false;
-        if (instanceData->modelInfo.contains("allow_batch_size_change"))
-        {
-            allow_batch_size_change = instanceData->modelInfo["allow_batch_size_change"];
-        }
-        if (!allow_batch_size_change)
-        {
-            // We cannot have more than 8 batches in D3D12 for certain models, so we limit it here
-            instanceData->params.n_batch = std::min(8, instanceData->params.n_batch);
-        }
 #else
         auto platform = "ggml.cpu";
 #endif
@@ -638,6 +639,89 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
                 }
 
                 instanceData->llamaContext = common_init_from_params(instanceData->params);
+
+                // Load Loras
+                if (creationParams->getVersion() >= kStructVersion3)
+                {
+
+                    std::vector<common_adapter_lora_info> lora_info_vec;
+                    for (int loraIndex = 0; loraIndex != creationParams->numLoras; ++loraIndex)
+                    {
+                        std::string loraName(creationParams->loraNames[loraIndex]);
+
+                        if (!instanceData->modelInfo.contains("loras"))
+                        {
+                            NVIGI_LOG_ERROR("Config for GUID '%s' has no loras.  Unable to load Lora.", common->modelGUID);
+                            break;
+                        }
+
+                        const json& loras = instanceData->modelInfo["loras"];
+                        for (const auto& lora : loras)
+                        {
+                            if (loraName == lora["name"])
+                            {
+                                std::string pluginDir = plugin::getContext()->framework->getModelDirectoryForPlugin(plugin::getContext()->info.id).c_str();
+                                auto directory = std::string((common->utf8PathToModels + std::string("/") + pluginDir + std::string("/") + common->modelGUID).c_str());
+                                auto loraPath = std::string(directory + std::string("/") + std::string(lora["filename"]));
+
+                                std::ifstream file_exists(loraPath);
+                                if (!file_exists.good())
+                                {
+                                    NVIGI_LOG_WARN("Unable to find %s.  Attempting direct search...", loraPath);
+                                    // our first attempt to locate the filename relative to the models folder was unsuccessful.  Now see if we can't just locate it without modification.
+                                    loraPath = std::string(lora["filename"]);
+                                    std::ifstream file_exists(loraPath);
+                                    if (!file_exists.good())
+                                    {
+                                        // if the file still can't be found, then report an error
+                                        NVIGI_LOG_ERROR("Unable to find %s", loraPath);
+                                        break;
+                                    }
+                                }
+
+                                neededVRAM += lora["vram"].get<size_t>();
+
+                                // This has LlamaCPP manage the loras
+                                llama_adapter_lora_ptr lora;
+                                lora.reset(llama_adapter_lora_init(instanceData->llamaContext.model.get(), loraPath.c_str()));
+                                if (lora == nullptr)
+                                    NVIGI_LOG_WARN("### NVIGI GPT SH -> Load Lora Adapter Failed: %s", loraName.c_str());
+                                else {
+                                    //instanceData->lora_adapters[loraName] = std::make_pair(loraPath, std::move(lora));
+                                    instanceData->lora_adapters[loraName] = InferenceContext::igi_adapter_lora_info{ loraPath, std::move(lora) };
+                                    NVIGI_LOG_INFO("### NVIGI GPT SH -> Load Lora Adapter: %s", loraName.c_str());
+                                }
+
+                                // If scales have been set, load the loras immediately.  If not, then they must be set during runtime before
+                                // they activate.
+                                if (creationParams->loraScales != nullptr)
+                                {
+                                    float loraScale = creationParams->loraScales[loraIndex];
+                                    if (loraScale < 0.0f || loraScale > 1.0f)
+                                    {
+                                        NVIGI_LOG_ERROR("Provided Lora Scale '%f' is out of bounds", loraScale);
+                                        break;
+                                    }
+
+                                    lora_info_vec.push_back({ loraPath, creationParams->loraScales[loraIndex], instanceData->lora_adapters[loraName].ptr.get() });
+                                }
+
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!lora_info_vec.empty())
+                    {
+                        common_set_adapter_lora(instanceData->llamaContext.context.get(), lora_info_vec);
+                    }
+
+                    if (instanceData->lora_adapters.size() != creationParams->numLoras)
+                    {
+                        NVIGI_LOG_WARN("Check logs, not all loras were loaded");
+                    }
+                }
+
             }
             catch (std::exception& e)
             {
@@ -893,18 +977,26 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
         instance->params.input_prefix = runtime->prefix ? runtime->prefix : "";
         instance->params.input_suffix = runtime->suffix ? runtime->suffix : "";
 
-#ifdef GGML_USE_D3D12
-        bool allow_batch_size_change = false;
-        if (instance->modelInfo.contains("allow_batch_size_change"))
+        // Adjust/Reload Loras if scales have changed.
+        if (runtime->getVersion() >= kStructVersion4)
         {
-            allow_batch_size_change = instance->modelInfo["allow_batch_size_change"];
+            std::vector<common_adapter_lora_info> lora_info_vec;
+            for (int i = 0; i < runtime->numLoras; ++i) {
+                if (!instance->lora_adapters.contains(runtime->loraNames[i])) {
+                    NVIGI_LOG_WARN("### NVIGI GPT SH -> Lora Adapter Not Found: %s", runtime->loraNames[i]);
+                    continue;
+                }
+                // need to store the path when I found it during create so I can look it up again to reset it.
+                lora_info_vec.push_back({ instance->lora_adapters[runtime->loraNames[i]].loraPath, runtime->loraScales[i], instance->lora_adapters[runtime->loraNames[i]].ptr.get() });
+            }
+            
+            // If we have an update to the lora info vec, then update it.
+            if (!lora_info_vec.empty())
+            {
+                common_set_adapter_lora(instance->llamaContext.context.get(), lora_info_vec);
+            }
         }
-        if (!allow_batch_size_change)
-        {
-            // We cannot have more than 8 batches in D3D12 for certain models so we limit it here
-            instance->params.n_batch = std::min(8, instance->params.n_batch);
-        }
-#endif
+
         if (runtime->getVersion() >= 2 && runtime->targetTokensPerSecond > 0 && runtime->frameTimeMs > 0)
         {
             if (!instance->sync.tgLimiter)

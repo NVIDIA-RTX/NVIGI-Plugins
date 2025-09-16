@@ -576,9 +576,9 @@ int InitTTS(const std::string& modelDir,
 {
     //! TTS Interface and Instance
     //! Detect backend based on GUID
-    //! GGML: {90D81B98-0954-4D64-B901-B4F7A3189DEC}
+    //! GGML: {33E000D6-35A2-46D8-BCB5-E10F8CA137C0}
     //! TRT:  {81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F}
-    nvigiCtx.ttsId = (guidTTS == "{90D81B98-0954-4D64-B901-B4F7A3189DEC}") ? 
+    nvigiCtx.ttsId = (guidTTS == "{33E000D6-35A2-46D8-BCB5-E10F8CA137C0}" || guidTTS == "{3D52FDC0-5B6D-48E1-B108-84D308818602}") ? 
         nvigi::plugin::tts::asqflow_ggml::cuda::kId : nvigi::plugin::tts::asqflow_trt::kId;
     if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigiCtx.ttsId, &nvigiCtx.itts, ptr_nvigiLoadInterface)))
     {
@@ -1004,7 +1004,7 @@ int main(int argc, char** argv)
     parser.add_command("", "gpt", " gpt mode, 'local' or 'cloud' (model GUID determines cloud endpoint)", "local");
     parser.add_command("", "gpt-guid", " gpt model guid in registry format", "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}");
     parser.add_command("", "asr-guid", " asr model guid in registry format", "{5CAD3A03-1272-4D43-9F3D-655417526170}");
-    parser.add_command("", "tts-guid", " tts model guid in registry format (GGML: {90D81B98-0954-4D64-B901-B4F7A3189DEC}, TRT: {81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F})", "{90D81B98-0954-4D64-B901-B4F7A3189DEC}");
+    parser.add_command("", "tts-guid", " tts model guid in registry format (GGML: {33E000D6-35A2-46D8-BCB5-E10F8CA137C0} TRT: {81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F})", "{33E000D6-35A2-46D8-BCB5-E10F8CA137C0}");
     parser.add_command("t", "token", " authorization token for the cloud provider", "");
     parser.add_command("", "vram", " the amount of vram to use in MB", "8192");
 

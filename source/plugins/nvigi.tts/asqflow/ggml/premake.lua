@@ -43,9 +43,9 @@ project "nvigi.plugin.tts.asqflow-ggml.vk"
 		libdirs {externaldir .."vulkanSDK/Lib"}
 
 		filter {"system:windows", "configurations:Debug"}
-			libdirs {externaldir .."asqflow.cpp/vk/lib/Debug"}
+			libdirs {externaldir .."asqflow.cpp/vulkan/lib/Debug"}
 		filter {"system:windows", "configurations:not Debug"}
-			libdirs {externaldir .."asqflow.cpp/vk/lib/NotDebug"}
+			libdirs {externaldir .."asqflow.cpp/vulkan/lib/NotDebug"}
 		
 		filter {"system:windows"}
 		
@@ -56,7 +56,7 @@ project "nvigi.plugin.tts.asqflow-ggml.vk"
 
 	
 	filter {"system:linux"}
-		libdirs {externaldir .."asqflow.cpp/vulkan/lib64"}
+		libdirs {externaldir .."asqflow.cpp/vulkan/lib"}
 		libdirs {externaldir .."SimpleFarForTTS/lib/Release"}
 		libdirs {externaldir .."vulkanSDK/lib/"}
 		includedirs {externaldir .."SimpleFarForTTS/"}
@@ -135,7 +135,7 @@ project "nvigi.plugin.tts.asqflow-ggml.cuda"
 			externaldir .."cuda/lib64",
 			externaldir .."cuda/lib64/stubs",
 		}
-		libdirs {externaldir .."asqflow.cpp/cuda/lib64"}
+		libdirs {externaldir .."asqflow.cpp/cuda/lib"}
 		libdirs {externaldir .."SimpleFarForTTS/lib/Release"}
 		includedirs {externaldir .."SimpleFarForTTS/"}
 		linkoptions {"-fopenmp", "-lcublas"}
@@ -146,6 +146,9 @@ project "nvigi.plugin.tts.asqflow-ggml.cuda"
 	filter {}
 
 	add_cuda_dependencies()
+
+if os.istarget("windows") then
+end
 
 
 group ""

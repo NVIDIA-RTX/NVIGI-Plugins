@@ -3,9 +3,9 @@
 
 The focus of this guide is on using In-Game Inferencing to integrate an ASR Whisper model into an application. More details can be found here [OpenAI Whisper](https://openai.com/research/whisper)
 
-Please read the `docs/ProgrammingGuideAI.md` :only:`binary_pack:([Which may be found here in combined binary packs](../../../nvigi_core/docs/ProgrammingGuideAI.md))` located in the NVIGI Core package to learn more about overall AI inference API in NVIGI SDK.
+Please read the [Programming Guide for AI](nvigi_core/docs/ProgrammingGuideAI.md) located in the NVIGI Core package to learn more about overall AI inference API in NVIGI SDK.
 
-> **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the SDK's Basic command line sample [Source Code](../source/samples/nvigi.basic/basic.cpp) and [Docs](../docs/Samples.md).  The Basic command-line sample includes the option to record audio and converting it to a text query for an LLM via the ASR plugins.
+> **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the SDK's Basic command line sample [Source Code](../source/samples/nvigi.basic/basic.cpp) and [Docs](Samples.md).  The Basic command-line sample includes the option to record audio and converting it to a text query for an LLM via the ASR plugins.
 
 > **IMPORTANT NOTE: The D3D12 backend (nvigi.plugin.asr.ggml.d3d12.dll) is provided only precompiled as a part of the downloadable binary pack (`nvigi_pack`).  It is not possible for developers to compile the D3D12 backend plugin from source in this release.**
 
@@ -15,7 +15,7 @@ Please read the `docs/ProgrammingGuideAI.md` :only:`binary_pack:([Which may be f
 
 ## 1.0 INITIALIZE AND SHUTDOWN
 
-Please read the `docs/ProgrammingGuide.md`  :only:`binary_pack:([Which may be found here in combined binary packs](../../../nvigi_core/docs/ProgrammingGuide.md))` located in the NVIGI Core package to learn more about initializing and shutting down NVIGI SDK. 
+Please read the [Programming Guide](nvigi_core/docs/ProgrammingGuide.md) located in the NVIGI Core package to learn more about initializing and shutting down NVIGI SDK. 
 
 ## 2.0 OBTAIN ASR INTERFACE
 

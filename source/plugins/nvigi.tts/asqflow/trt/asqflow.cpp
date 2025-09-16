@@ -603,7 +603,24 @@ nvigi::Result asqflowEvaluate(nvigi::InferenceExecutionContext *execCtx, bool as
                             basenameSpectogram.c_str());
             return kResultInvalidParameter;
         }
-        instance->params.transcriptTarget = jsonData.at(basenameSpectogram);
+        
+        // Check if the transcript entry is an object with "text" field
+        auto transcriptEntry = jsonData.at(basenameSpectogram);
+        if (transcriptEntry.is_object() && transcriptEntry.contains("text"))
+        {
+            instance->params.transcriptTarget = transcriptEntry["text"];
+        }
+        else if (transcriptEntry.is_string())
+        {
+            // Backwards compatibility for old format
+            instance->params.transcriptTarget = transcriptEntry;
+        }
+        else
+        {
+            NVIGI_LOG_ERROR("Invalid transcript format for '%s' - expected object with 'text' field or string", 
+                            basenameSpectogram.c_str());
+            return kResultInvalidParameter;
+        }
     }
 
     // We apply the global scheduling mode to our streams at every evaluate() 

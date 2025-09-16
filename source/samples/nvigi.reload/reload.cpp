@@ -725,7 +725,7 @@ int main(int argc, char** argv)
 
             LogVRAM();
 
-            runInference = true;
+            runInference = false;
 
             if (!conversationInitialized)
             {
@@ -743,32 +743,48 @@ int main(int argc, char** argv)
             }
             else if (gptInputText == "<unload>")
             {
+                loggingCallback(nvigi::LogType::eInfo, "\n** Unloading all models\n");
                 for (auto& it : nvigiCtx.gptModels)
                 {
                     SetResourceMapResidency(it.second, false);
                 }
-                runInference = false;
             }
-            else if (gptInputText == "<llama3>" && gptModelName != "llama3")
+            else if (gptInputText == "<llama3>")
             {
-                SetResourceMapResidency(gptModelName, false);
-                gptModelName = "llama3";
-                conversationInitialized = false;
+                if (gptModelName != "llama3")
+                {
+                    loggingCallback(nvigi::LogType::eInfo, "\n** Loading llama3 model\n");
+                    SetResourceMapResidency(gptModelName, false);
+                    gptModelName = "llama3";
+                    conversationInitialized = false;
+                }
+                else
+                {
+                    loggingCallback(nvigi::LogType::eInfo, "\n** Already using llama3 model\n");
+				}
             }
-            else if (gptInputText == "<nemotron>" && gptModelName != "nemotron")
+            else if (gptInputText == "<nemotron>")
             {
-                SetResourceMapResidency(gptModelName, false);
-                gptModelName = "nemotron";
-                conversationInitialized = false;
+                if (gptModelName != "nemotron")
+                {
+                    loggingCallback(nvigi::LogType::eInfo, "\n** Loading nemotron model\n");
+                    SetResourceMapResidency(gptModelName, false);
+                    gptModelName = "nemotron";
+                    conversationInitialized = false;
+                }
+                else
+                {
+                    loggingCallback(nvigi::LogType::eInfo, "\n** Already using nemotron model\n");
+				}
             }
             else if (gptInputText[0] == '<')
             {
                 loggingCallback(nvigi::LogType::eInfo, "\n** Unknown \"<\" keyword.  This app supports <unload>, <llama3> and <nemotron>\n");
-                runInference = false;
             }
             else
             {
                 // Use the given getline result as the text
+                runInference = true;
             }
         } while (running);
     }
