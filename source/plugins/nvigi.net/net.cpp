@@ -90,6 +90,19 @@ int curlCallbackDebug(CURL* handle, curl_infotype type, char* data, size_t size,
     return 0; // Return 0 to indicate success
 }
 
+// Structure to pass both callback and userdata to CURL
+struct CallbackData {
+    StreamingDataCallback callback;
+    void* userdata;
+};
+
+// Create a custom write callback for streaming data
+size_t streamingWriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
+    auto* cbData = static_cast<CallbackData*>(userp);
+    size_t realsize = size * nmemb;
+    return cbData->callback(static_cast<const char*>(contents), realsize, cbData->userdata);
+};
+
 struct Network : public INetworkInternal
 {
     virtual Result initialize() override final
@@ -272,6 +285,48 @@ struct Network : public INetworkInternal
             NVIGI_LOG_WARN("Server returned non-JSON response '%s'", tmp.c_str());
             return kResultNetServerError;
         }
+        return kResultOk;
+    }
+
+    virtual Result nvcfPostStreaming(const Parameters& params, StreamingDataCallback callback, void* userdata) override final
+    {
+        curl_easy_setopt(curl, CURLOPT_URL, params.url.c_str());
+
+        struct curl_slist* headers = NULL;
+        for (auto h : params.headers)
+        {
+            headers = curl_slist_append(headers, h.c_str());
+        }
+        
+        if (!gfnKey.empty())
+        {
+            headers = curl_slist_append(headers, ("Authorization: Bearer " + gfnKey).c_str());
+        }
+
+        CallbackData callbackData = { callback, userdata };
+
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, params.data.data());
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, params.data.size());
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, streamingWriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &callbackData);
+        curl_easy_setopt(curl, CURLOPT_VERBOSE, verboseMode ? 1 : 0);
+        curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, 128L); // Small buffer for frequent callbacks
+
+        NVIGI_LOG_VERBOSE("Connecting to '%s' for streaming response ...", params.url.c_str());
+        auto res = curl_easy_perform(curl);
+        
+        if (res != CURLE_OK)
+        {
+            NVIGI_LOG_ERROR("CURL streaming POST request failed with error - %s", curl_easy_strerror(res));
+            curl_easy_reset(curl);
+            curl_slist_free_all(headers);
+            return kResultNetCurlError;
+        }
+
+        curl_easy_reset(curl);
+        curl_slist_free_all(headers);
         return kResultOk;
     }
 

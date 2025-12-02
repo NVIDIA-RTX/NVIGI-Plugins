@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MIT
 //
 
+#include <future>
+
 #include "source/core/nvigi.api/nvigi.h"
 #include "source/core/nvigi.api/nvigi_cloud.h"
 #include "source/core/nvigi.api/internal.h"
@@ -14,6 +16,7 @@
 #include "source/plugins/nvigi.gpt/rest/versions.h"
 #include "source/utils/nvigi.ai/ai.h"
 #include "source/utils/nvigi.ai/ai_data_helpers.h"
+#include "source/utils/nvigi.poll/poll.h"
 #include "source/plugins/nvigi.net/net.h"
 #include "source/plugins/nvigi.gpt/nvigi_gpt.h"
 #include "_artifacts/gitVersion.h"
@@ -27,11 +30,14 @@ namespace gpt
 
 struct InferenceContext
 {
+    poll::PollContext<nvigi::InferenceExecutionState> pollCtx;
     std::string prompt{};
     std::string token{};
     std::string url{};
     bool verboseMode{};
+    bool stream{};
     json modelInfo;
+    std::future<nvigi::Result> asyncJob;
 };
 
 PluginID getFeatureId(InferenceInstanceData* data)
@@ -77,6 +83,7 @@ struct GPTContext
     nvigi::PluginID feature{};
 
     IGeneralPurposeTransformer api{};
+    IPolledInferenceInterface polledApi{};
 
     // Caps and requirements (allocations destroyed on unregister plugin)
     json modelInfo;
@@ -86,23 +93,13 @@ struct GPTContext
 };
 
 nvigi::Result evaluate(nvigi::InferenceExecutionContext* execCtx);
+nvigi::Result evaluateAsync(nvigi::InferenceExecutionContext* execCtx);
 }
 
 //! Define our plugin, make sure to update version numbers in versions.h
 NVIGI_PLUGIN_DEFINE("nvigi.plugin.gpt", Version(VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH), Version(API_MAJOR, API_MINOR, API_PATCH), gpt, GPTContext)
 
 nvigi::Result restEvaluate(nvigi::InferenceExecutionContext* execCtx);
-
-nvigi::Result restDestroyInstance(const nvigi::InferenceInstance* instance)
-{
-    if (instance)
-    {
-        auto gptInstance = static_cast<nvigi::gpt::InferenceContext*>(instance->data);
-        delete gptInstance;
-        delete instance;
-    }
-    return nvigi::kResultOk;
-}
 
 nvigi::Result restCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::InferenceInstance** _instance)
 {
@@ -143,12 +140,13 @@ nvigi::Result restCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
     }
 
     std::string model = modelInfo[common->modelGUID]["request_body"]["model"];
-    NVIGI_LOG_INFO("Created instance for the remote model '%s'", model.c_str());
+    NVIGI_LOG_INFO("Created instance for the remote model '%s', stream %s, verbose %s", model.c_str(), restParams->useStreaming ? "yes" : "no", restParams->verboseMode ? "yes" : "no");
 
     auto instanceData = new nvigi::gpt::InferenceContext();
     instanceData->token = restParams->authenticationToken;
     instanceData->url = restParams->url;
     instanceData->verboseMode = restParams->verboseMode;
+    instanceData->stream = restParams->getVersion() >= 2 ? restParams->useStreaming : false;
 
     // Explicitly declaring that we are implementing v1
     auto instance = new InferenceInstance(kStructVersion1);
@@ -157,6 +155,7 @@ nvigi::Result restCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
     instance->getInputSignature = gpt::getInputSignature;
     instance->getOutputSignature = gpt::getOutputSignature;
     instance->evaluate = gpt::evaluate;
+    instance->evaluateAsync = gpt::evaluateAsync;
 
     *_instance = instance;
 
@@ -283,7 +282,7 @@ void replacePlaceholdersInJson(json& jsonObj, const std::string& userValue, cons
     }
 }
 
-nvigi::Result restEvaluate(nvigi::InferenceExecutionContext* execCtx)
+nvigi::Result restEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async = false)
 {
     auto& ctx = (*gpt::getContext());
 
@@ -295,7 +294,7 @@ nvigi::Result restEvaluate(nvigi::InferenceExecutionContext* execCtx)
         return kResultInvalidParameter;
     }
 
-    if (!execCtx->callback)
+    if (!execCtx->callback && !async)
     {
         NVIGI_LOG_ERROR("GPT inference callback not provided");
         return kResultInvalidParameter;
@@ -328,7 +327,17 @@ nvigi::Result restEvaluate(nvigi::InferenceExecutionContext* execCtx)
         {
             json responseJSON = json::parse(response);
             responseJSONStr = responseJSON.dump(2, ' ', false, json::error_handler_t::replace);
-            content = responseJSON["choices"][0]["message"]["content"];
+            auto& firstChoice = responseJSON["choices"][0];
+            if (firstChoice.contains("delta"))
+            {
+                // streaming
+                content = firstChoice["delta"]["content"];
+            }
+            else
+            {
+                // full message
+                content = firstChoice["message"]["content"];
+            }
             if (runtime && runtime->interactive)
             {
                 instance->prompt += "\n" + content;
@@ -350,7 +359,14 @@ nvigi::Result restEvaluate(nvigi::InferenceExecutionContext* execCtx)
             {
                 return nvigi::kInferenceExecutionStateInvalid;
             }
-            res = execCtx->callback(execCtx, state, execCtx->callbackUserData);
+            if (execCtx->callback)
+            {
+                res = execCtx->callback(execCtx, state, execCtx->callbackUserData);
+            }
+            else
+            {
+                res = instance->pollCtx.triggerCallback(state);
+            }
         }
         else
         {
@@ -360,7 +376,14 @@ nvigi::Result restEvaluate(nvigi::InferenceExecutionContext* execCtx)
             std::vector<nvigi::InferenceDataSlot> slots = { {kGPTDataSlotResponse, responseSlot}, { kGPTDataSlotJSON, jsonSlot } };
             nvigi::InferenceDataSlotArray outputs = { slots.size(), slots.data() };
             execCtx->outputs = &outputs;
-            res = execCtx->callback(execCtx, state, execCtx->callbackUserData);
+            if (execCtx->callback)
+            {
+                res = execCtx->callback(execCtx, state, execCtx->callbackUserData);
+            }
+            else
+            {
+                res = instance->pollCtx.triggerCallback(state);
+            }
             //! Clear outputs since these are all local variables
             execCtx->outputs = {};
         }
@@ -424,6 +447,8 @@ nvigi::Result restEvaluate(nvigi::InferenceExecutionContext* execCtx)
                     jsonData["max_tokens"] = runtime->tokensToPredict;
                 }
             }
+            // Override streaming with what was provided from the host in the RESTParameters (if any, false is default)
+            jsonData["stream"] = instance->stream;
             replacePlaceholdersInJson(jsonData, user, assistant, instance->prompt);
             instance->prompt += "\n" + user;
             jsonBody = jsonData.dump(2, ' ', false, json::error_handler_t::replace);
@@ -459,6 +484,7 @@ nvigi::Result restEvaluate(nvigi::InferenceExecutionContext* execCtx)
             NVIGI_LOG_ERROR("Malformed JSON input slot - exception %s", e.what());
             return kResultInvalidState;
         }
+        // NOTE: No change to streaming here since JSON request body is coming directly from host and we use it as is
     }
 
     // Cloud inference
@@ -477,19 +503,184 @@ nvigi::Result restEvaluate(nvigi::InferenceExecutionContext* execCtx)
     hparams.data.resize(jsonObj.size());
     memcpy(hparams.data.data(), jsonObj.c_str(), jsonObj.size());
 
-    json responseAsJSON;
-    types::string response;
-    auto res = ctx.net->nvcfPost(hparams, response);
-    if (res == kResultOk)
+    // Check if streaming is enabled, if not in JSON use default
+    instance->stream = extra::getJSONValue(jsonData, "stream", instance->stream);
+    
+    nvigi::Result res = kResultOk;
+
+    if (instance->stream)
     {
-        responseCallback(instance, response.c_str(), nvigi::kInferenceExecutionStateDone);
+        // Handle streaming response
+        std::string streamBuffer;
+        
+        // Structure to hold callback context for streaming
+        struct StreamingContext {
+            decltype(responseCallback)* originalCallback;
+            nvigi::gpt::InferenceContext* instance;
+            std::string* streamBuffer;
+        } streamingCtx = { &responseCallback, instance, &streamBuffer };
+        
+        auto streamingCallback = [](const char* data, size_t size, void* userdata) -> size_t {
+            auto* ctx = static_cast<StreamingContext*>(userdata);
+            ctx->streamBuffer->append(data, size);
+            
+            // Process Server-Sent Events (SSE) format
+            size_t pos = 0;
+            while ((pos = ctx->streamBuffer->find('\n')) != std::string::npos)
+            {
+                std::string line = ctx->streamBuffer->substr(0, pos);
+                ctx->streamBuffer->erase(0, pos + 1);
+                
+                // Remove \r if present
+                if (!line.empty() && line.back() == '\r')
+                {
+                    line.pop_back();
+                }
+                
+                // Skip empty lines and comments
+                if (line.empty() || line[0] == ':')
+                {
+                    continue;
+                }
+                
+                // Parse SSE data lines
+                if (line.substr(0, 6) == "data: ")
+                {
+                    std::string eventData = line.substr(6);
+                    
+                    // Check for end of stream
+                    if (eventData == "[DONE]")
+                    {
+                        (*ctx->originalCallback)(ctx->instance, "", nvigi::kInferenceExecutionStateDone);
+                        return size;
+                    }
+                    
+                    try
+                    {
+                        json chunkJson = json::parse(eventData);
+                        if (chunkJson.contains("choices") && !chunkJson["choices"].empty())
+                        {
+                            auto& choice = chunkJson["choices"][0];
+                            if (choice.contains("delta") && choice["delta"].contains("content"))
+                            {
+                                if (choice["delta"]["content"].is_string()) {
+                                    std::string content = choice["delta"]["content"];
+                                    (*ctx->originalCallback)(ctx->instance, chunkJson.dump().c_str(), nvigi::kInferenceExecutionStateDataPending);
+                                }
+                            }
+                        }
+                    }
+                    catch (std::exception& e)
+                    {
+                        NVIGI_LOG_WARN("Failed to parse streaming JSON chunk: %s", e.what());
+                    }
+                }
+            }
+            
+            return size;
+        };
+        
+        res = ctx.net->nvcfPostStreaming(hparams, streamingCallback, &streamingCtx);
     }
     else
+    {
+        // Handle non-streaming response (original code)
+        json responseAsJSON;
+        types::string response;
+        res = ctx.net->nvcfPost(hparams, response);
+        if (res == kResultOk)
+        {
+            responseCallback(instance, response.c_str(), nvigi::kInferenceExecutionStateDone);
+        }
+    }
+
+    if (res != kResultOk)
     {
         return nvigi::kResultInvalidState;
     }
 
     return kResultOk;
+}
+
+nvigi::Result flushAsyncJob(nvigi::gpt::InferenceContext* instance)
+{
+    if (instance->asyncJob.valid())
+    {
+        // Release any results that are pending
+        if (instance->pollCtx.checkResultPending())
+        {
+            instance->pollCtx.releaseResults(nvigi::kInferenceExecutionStateDone);
+        }
+        // Wait for the job with timeout
+        auto result = instance->asyncJob.wait_for(std::chrono::seconds(10));
+        if (result == std::future_status::ready)
+        {
+            if (NVIGI_FAILED(result, instance->asyncJob.get()))
+            {
+                return result;
+            }
+        }
+        else
+        {
+            NVIGI_LOG_WARN("Async job timed out.");
+            return kResultTimedOut;
+        }
+    }
+    return kResultOk;
+}
+
+nvigi::Result restEvaluateAsync(nvigi::InferenceExecutionContext* execCtx)
+{
+    // For REST/cloud inference, we can run the evaluation asynchronously
+    // The actual HTTP call will be synchronous but we run it in a separate thread
+    auto instance = (nvigi::gpt::InferenceContext*)(execCtx->instance->data);
+    
+    // If there's already an async job running, wait for it to complete
+    if (NVIGI_FAILED(res, flushAsyncJob(instance)))
+    {
+        return res;
+    }
+    
+    // Launch async evaluation
+    instance->asyncJob = std::async(std::launch::async, [execCtx]() -> nvigi::Result {
+        return restEvaluate(execCtx, true);
+    });
+    
+    return kResultOk;
+}
+
+nvigi::Result restDestroyInstance(const nvigi::InferenceInstance* instance)
+{
+    if (instance)
+    {
+        auto gptInstance = static_cast<nvigi::gpt::InferenceContext*>(instance->data);
+        // If there's already an async job running, wait for it to complete
+        if (NVIGI_FAILED(res, flushAsyncJob(gptInstance)))
+        {
+            return res;
+        }
+        delete gptInstance;
+        delete instance;
+    }
+    return nvigi::kResultOk;
+}
+
+nvigi::Result restGetResults(nvigi::InferenceExecutionContext* execCtx, bool wait, nvigi::InferenceExecutionState* state)
+{
+    if (!execCtx || !execCtx->instance)
+        return kResultInvalidParameter;
+
+    auto instance = static_cast<gpt::InferenceContext*>(execCtx->instance->data);
+    return instance->pollCtx.getResults(wait, state);
+}
+
+nvigi::Result restReleaseResults(nvigi::InferenceExecutionContext* execCtx, nvigi::InferenceExecutionState state)
+{
+    if (!execCtx || !execCtx->instance)
+        return kResultInvalidParameter;
+
+    auto instance = static_cast<gpt::InferenceContext*>(execCtx->instance->data);
+    return instance->pollCtx.releaseResults(state);
 }
 
 //! Exception handling wrappers
@@ -512,7 +703,19 @@ nvigi::Result getCapsAndRequirements(nvigi::NVIGIParameter** modelInfo, const nv
 }
 nvigi::Result evaluate(nvigi::InferenceExecutionContext* execCtx)
 {
-    NVIGI_CATCH_EXCEPTION(restEvaluate(execCtx));
+    NVIGI_CATCH_EXCEPTION(restEvaluate(execCtx, false));
+}
+nvigi::Result evaluateAsync(nvigi::InferenceExecutionContext* execCtx)
+{
+    NVIGI_CATCH_EXCEPTION(restEvaluateAsync(execCtx));
+}
+nvigi::Result getResults(nvigi::InferenceExecutionContext* execCtx, bool wait, nvigi::InferenceExecutionState* state)
+{
+    NVIGI_CATCH_EXCEPTION(restGetResults(execCtx, wait, state));
+}
+nvigi::Result releaseResults(nvigi::InferenceExecutionContext* execCtx, nvigi::InferenceExecutionState state)
+{
+    NVIGI_CATCH_EXCEPTION(restReleaseResults(execCtx, state));
 }
 } // gpt
 
@@ -565,6 +768,11 @@ Result nvigiPluginRegister(framework::IFramework* framework)
     ctx.api.getCapsAndRequirements = gpt::getCapsAndRequirements;
  
     framework->addInterface(ctx.feature, &ctx.api, 0);
+
+    // Add polled interface
+    ctx.polledApi.getResults = gpt::getResults;
+    ctx.polledApi.releaseResults = gpt::releaseResults;
+    framework->addInterface(ctx.feature, &ctx.polledApi, 0);
 
     return kResultOk;
 }

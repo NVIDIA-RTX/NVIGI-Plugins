@@ -109,25 +109,36 @@
 	nvigi-sdk-source\data\nvigi.test\nvigi.tts\asqflow\mel_spectrograms_targets/Claire_sadness_8s_se.bin
 	nvigi-sdk-source\data\nvigi.test\nvigi.tts\asqflow\mel_spectrograms_targets/transcripts.json
 	nvigi-sdk-source\docs/3rd-party-licenses.md
-	nvigi-sdk-source\docs/GettingStarted.md
+	nvigi-sdk-source\docs/FirstSteps.md
+	nvigi-sdk-source\docs/Introduction.md
 	nvigi-sdk-source\docs/NVIGIDeveloperPack.md
 	nvigi-sdk-source\docs/Plugins.md
 	nvigi-sdk-source\docs/ProgrammingGuideASRWhisper.md
 	nvigi-sdk-source\docs/ProgrammingGuideEmbed.md
 	nvigi-sdk-source\docs/ProgrammingGuideGPT.md
 	nvigi-sdk-source\docs/ProgrammingGuideTTSASqFlow.md
-	nvigi-sdk-source\docs/Samples.md
+	nvigi-sdk-source\docs/ReleaseNotes.md
+	nvigi-sdk-source\docs/Samples3D.md
+	nvigi-sdk-source\docs/SamplesBasic.md
+	nvigi-sdk-source\docs/SamplesBasicCxxASR.md
+	nvigi-sdk-source\docs/SamplesBasicCxxGPT.md
+	nvigi-sdk-source\docs/SamplesBasicCxxTTS.md
+	nvigi-sdk-source\docs/SamplesFcall.md
+	nvigi-sdk-source\docs/SamplesPipeline.md
+	nvigi-sdk-source\docs/SamplesRAG.md
+	nvigi-sdk-source\docs/SamplesReload.md
 	nvigi-sdk-source\docs/SourceBuild.md
+	nvigi-sdk-source\docs\media/3dsample_app.png
+	nvigi-sdk-source\docs\media/3dsample_asr.png
+	nvigi-sdk-source\docs\media/3dsample_asr_auto.png
+	nvigi-sdk-source\docs\media/3dsample_entry.png
+	nvigi-sdk-source\docs\media/3dsample_full.png
+	nvigi-sdk-source\docs\media/3dsample_gpt.png
+	nvigi-sdk-source\docs\media/3dsample_header.png
+	nvigi-sdk-source\docs\media/3dsample_tts.png
 	nvigi-sdk-source\docs\media/ASqFlowSolution.png
-	nvigi-sdk-source\docs\media/app_settings_fps_ui.png
-	nvigi-sdk-source\docs\media/app_settings_ui.png
-	nvigi-sdk-source\docs\media/auto_settings_dropdown.png
-	nvigi-sdk-source\docs\media/auto_settings_ui.png
 	nvigi-sdk-source\docs\media/guid-1.png
 	nvigi-sdk-source\docs\media/guid.png
-	nvigi-sdk-source\docs\media/main_ui.png
-	nvigi-sdk-source\docs\media/manual_settings_dropdown.png
-	nvigi-sdk-source\docs\media/maual_settings_ui.png
 	nvigi-sdk-source\premake/premake.cuda_utils.lua
 	nvigi-sdk-source\premake/premake.shared_config.lua
 	nvigi-sdk-source\premake/premake.shared_plugin.lua
@@ -218,6 +229,21 @@
 	nvigi-sdk-source\source\samples\nvigi.3d\src\nvigi/NVIGIContext.h
 	nvigi-sdk-source\source\samples\nvigi.basic/basic.cpp
 	nvigi-sdk-source\source\samples\nvigi.basic/premake.lua
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx/clparser.hpp
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx/core.hpp
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx/d3d12.hpp
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx/vulkan.hpp
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx\asr/asr.hpp
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx\asr/audio.hpp
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx\asr/basic_asr.cpp
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx\asr/premake.lua
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx\gpt/basic_gpt.cpp
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx\gpt/cloud_test.json
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx\gpt/gpt.hpp
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx\gpt/premake.lua
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx\tts/basic_tts.cpp
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx\tts/premake.lua
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx\tts/tts.hpp
 	nvigi-sdk-source\source\samples\nvigi.fcall/fcall.cpp
 	nvigi-sdk-source\source\samples\nvigi.fcall/premake.lua
 	nvigi-sdk-source\source\samples\nvigi.pipeline/pipeline.cpp

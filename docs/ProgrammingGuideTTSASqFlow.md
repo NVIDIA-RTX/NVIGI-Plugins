@@ -2,10 +2,11 @@
 
 The focus of this guide is on using AI Inference Manager to integrate a TTS model into an application.  The model is known as Riva Magpie Flow, but the plugin is named A-Squared Flow (ASqFlow), based upon the original name of the model as shipped in NVIGI 1.1.1.  To avoid issues with applications upgrading from 1.1.1 to a newer version, the plugin name was retained.
 
-> **IMPORTANT:**
-> **This feature is considered experimental in this release.  It is subject to significant change in later releases, possibly requring app modifications.**
+> **MIN RUNTIME SPEC:** Note that all TTS Riva Magpie Flow backends require a CPU supporting AVX2 instructions.  Support for this instruction extension is ubiquitous in modern gaming CPUs, but older hardware may not support it.
 
-> **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the SDK's Basic command line sample [Source Code](../source/samples/nvigi.basic/basic.cpp) and [Docs](Samples.md).  The Basic command-line sample includes the option to pass the results of an LLM query to TTS, and then plays it back.
+> **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the SDK's Basic command line sample. For modern C++ examples, see [basic_tts.cpp](../source/samples/nvigi.basic.cxx/tts/basic_tts.cpp) which demonstrates both the low-level C API and the modern C++ wrapper with RAII, `std::expected`, and builder patterns. The wrapper code is located in [tts.hpp](../source/samples/nvigi.basic.cxx/tts/tts.hpp).
+
+> **RECOMMENDED**: For new projects, consider using the **Modern C++ Wrapper** (sections 1.2.1, 2.1, 3.1, 4.3, 6.1, and 7.1) which provides a cleaner API with automatic resource management, error handling via `std::expected`, and game-loop friendly async operations.
 
 > **IMPORTANT NOTE: The CUDA backend (nvigi.plugin.tts.asqflow-ggml.cuda.dll) strongly recommends an NVIDIA R580 driver or newer in order to avoid a potential memory leak if CiG (CUDA in Graphics) is used and the application deletes D3D12 command queues mid-application.**
 
@@ -91,7 +92,32 @@ The chunking mechanism processes each text segment independently, generating com
 
 ## 1.2 INITIALIZE AND SHUTDOWN
 
-Please read the [Programming Guide](../../../nvigi_core/docs/ProgrammingGuide.md) located in the NVIGI Core package to learn more about initializing and shutting down NVIGI SDK. 
+Please read the [Programming Guide](../../../nvigi_core/docs/ProgrammingGuide.md) located in the NVIGI Core package to learn more about initializing and shutting down NVIGI SDK.
+
+### 1.2.1 MODERN C++ WRAPPER (RECOMMENDED)
+
+The NVIGI SDK provides modern C++ wrappers that simplify initialization and provide a cleaner API with RAII, `std::expected`, and builder patterns. The wrappers are located in `source/samples/nvigi.basic.cxx/` and can be used in your projects.
+
+```cpp
+#include "core.hpp"
+#include "tts.hpp"
+
+using namespace nvigi::tts;
+
+// Initialize NVIGI core with builder pattern
+nvigi::Core core({ 
+    .sdkPath = "path/to/sdk",
+    .logLevel = nvigi::LogLevel::eDefault,
+    .showConsole = true 
+});
+
+// Access system information
+const auto& sysInfo = core.getSystemInfo();
+std::cout << "Detected " << sysInfo.getNumPlugins() << " plugins\n";
+std::cout << "Detected " << sysInfo.getNumAdapters() << " adapters\n";
+```
+
+> **NOTE:** The C++ wrappers provide the same functionality as the low-level API but with modern C++ idioms. Both approaches are valid and can be mixed if needed. 
 
 ## 2.0 OBTAIN TTS INTERFACE(S)
 
@@ -99,7 +125,7 @@ Next, we need to retrieve TTS's API interface based on ASqFlow. ASqFlow supports
 
 - **TRT Backend**: Optimized TensorRT implementation
 - **GGML CUDA Backend**: Experimental GGML-based implementation with additional runtime configuration options and **language selection support**. The GGML backend provides two model variants:
-  - **FP16 Model**: `{33E000D6-35A2-46D8-BCB5-E10F8CA137C0}` - Higher precision, better quality
+  - **FP16 Model**: `{16EEB8EA-55A8-4F40-BECE-CE995AF44101}` - Higher precision, better quality
   - **Q4 Model**: `{3D52FDC0-5B6D-48E1-B108-84D308818602}` - Quantized model, smaller memory footprint
 
 ```cpp
@@ -200,7 +226,7 @@ nvigi::InferenceInstance* ttsInstanceLocal;
     common.modelGUID = "{81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F}"; // TRT model
     
     // For GGML backend - two options available:
-    // common.modelGUID = "{33E000D6-35A2-46D8-BCB5-E10F8CA137C0}"; // GGML FP16 model (higher quality)
+    // common.modelGUID = "{16EEB8EA-55A8-4F40-BECE-CE995AF44101}"; // GGML FP16 model (higher quality)
     // common.modelGUID = "{3D52FDC0-5B6D-48E1-B108-84D308818602}"; // GGML Q4 model (smaller memory footprint)
     params.warmUpModels = true; // faster inference, disable it if you want faster creation time. Default True.
 
@@ -302,11 +328,91 @@ The `TTSASqFlowRuntimeParameters` structure allows you to control inference beha
 > **NOTE:**
 One can only obtain interface for a feature which is available on user system. Interfaces are valid as long as the underlying plugin is loaded and active.
 
+### 2.1 MODERN C++ WRAPPER APPROACH
 
+The C++ wrapper handles interface loading automatically during instance creation. You don't need to manually obtain interfaces:
 
-## 4.0 SETUP CALLBACK TO RECEIVE INFERRED DATA
+```cpp
+// No manual interface loading needed!
+// Just create the instance with your desired backend
+```
 
-In order to receive audio data from the TTS model inference a special callback needs to be setup like this:
+See section 3.1 for complete instance creation examples using the wrapper.
+
+## 3.1 MODERN C++ WRAPPER APPROACH
+
+The C++ wrapper simplifies instance creation with builder patterns and automatic resource management:
+
+```cpp
+#include "d3d12.hpp"  // or "vulkan.hpp"
+
+using namespace nvigi::tts;
+
+// Setup D3D12 (if using D3D12 or CUDA backend)
+auto deviceAndQueue = nvigi::d3d12::D3D12Helper::create_best_compute_device();
+nvigi::d3d12::D3D12Config d3d12_config = {
+    .device = deviceAndQueue.device.Get(),
+    .command_queue = deviceAndQueue.compute_queue.Get(),
+    .create_committed_resource_callback = nvigi::d3d12::default_create_committed_resource,
+    .destroy_resource_callback = nvigi::d3d12::default_destroy_resource
+};
+
+// Or setup Vulkan (if using Vulkan backend)
+auto vk_objects = nvigi::vulkan::VulkanHelper::create_best_compute_device();
+nvigi::vulkan::VulkanConfig vk_config = {
+    .instance = vk_objects.instance,
+    .physical_device = vk_objects.physical_device,
+    .device = vk_objects.device,
+    .compute_queue = vk_objects.compute_queue,
+    .transfer_queue = vk_objects.transfer_queue,
+    .allocate_memory_callback = nvigi::vulkan::default_allocate_memory,
+    .free_memory_callback = nvigi::vulkan::default_free_memory
+};
+
+// Create TTS instance with builder pattern
+auto instance = Instance::create(
+    ModelConfig{
+        .backend = "d3d12",  // or "cuda", "vulkan"
+        .guid = "{16EEB8EA-55A8-4F40-BECE-CE995AF44101}",  // GGML FP16 model
+        .model_path = "path/to/nvigi.models",
+        .num_threads = 8,
+        .vram_budget_mb = 2048,
+        .warm_up_models = true
+    },
+    d3d12_config,      // Pass your config based on backend
+    vk_config,         // Can pass both, unused ones are ignored
+    core.loadInterface(),
+    core.unloadInterface()
+).value();  // Will throw if creation fails
+
+// Query supported languages
+auto supported_langs = instance->get_supported_languages();
+if (!supported_langs.empty()) {
+    std::cout << "Supported Languages: ";
+    for (const auto& lang : supported_langs) {
+        std::cout << lang << " ";
+    }
+    std::cout << "\n";
+}
+
+// Instance is ready to use!
+// RAII ensures proper cleanup when instance goes out of scope
+```
+
+The wrapper automatically:
+- Loads the correct plugin based on backend
+- Chains all creation parameters correctly
+- Manages interface lifetimes
+- Provides clear error messages via `std::expected`
+- Cleans up resources when destroyed
+
+## 4.0 RECEIVE INFERRED DATA
+
+There are two ways to receive data from TTS inference when using evaluateAsync: using a callback or polling for results.
+
+### 4.1 CALLBACK APPROACH
+
+To receive audio data via callback, set up the callback handler like this:
 
 ```cpp
 // Callback when tts Inference starts sending audio data
@@ -363,6 +469,205 @@ auto ttsOnComplete = [](const nvigi::InferenceExecutionContext *ctx, nvigi::Infe
 > **NOTE:**
 > To cancel TTS inference make sure to return `nvigi::InferenceExecutionStateCancel` state in the callback.
 
+### 4.2 POLLING APPROACH
+
+Alternatively, when using evaluateAsync, you can poll for results instead of using a callback. This is useful when you want more control over when to process results or need to integrate with a polling-based architecture:
+
+```cpp
+// Start async evaluation without a callback
+ttsContext.callback = nullptr;
+if (NVIGI_FAILED(res, ttsContext.instance->evaluateAsync(&ttsContext))) {
+    LOG("NVIGI async evaluation failed, code %d", res);
+    return;
+}
+
+// Get polled interface
+nvigi::IPolledInferenceInterface* polledInterface{};
+if (NVIGI_FAILED(res, nvigiGetInterface(nvigi::plugin::tts::asqflow::ggml::cuda::kId, &polledInterface))) {
+    LOG("Failed to get polled interface, code %d", res);
+    return;
+}
+
+// Poll for results
+while (true) {
+    nvigi::InferenceExecutionState state;
+    
+    // Get current results - pass true to wait for new data, false to check immediately
+    if (NVIGI_FAILED(res, polledInterface->getResults(&ttsContext, true, &state))) {
+        LOG("Failed to get results, code %d", res);
+        break;
+    }
+    
+    // Process the current results if available
+    if (ttsContext.outputs) {
+        const nvigi::InferenceDataByteArray* audioData{};
+        const nvigi::InferenceDataText* textNormalized{};
+        
+        ttsContext.outputs->findAndValidateSlot(nvigi::kTTSDataSlotOutputAudio, &audioData);
+        ttsContext.outputs->findAndValidateSlot(nvigi::kTTSDataSlotOutputTextNormalized, &textNormalized);
+        
+        if (audioData) {
+            CpuData* cpuBuffer = castTo<CpuData>(audioData->bytes);
+            // Process audio chunk (e.g., play it or save it)
+            std::vector<int16_t> audioChunk;
+            for (int i = 0; i < cpuBuffer->sizeInBytes / 2; i++) {
+                audioChunk.push_back(reinterpret_cast<const int16_t*>(cpuBuffer->buffer)[i]);
+            }
+            playAudioChunk(audioChunk);  // Your audio playback function
+        }
+    }
+    
+    // Release the current results to free resources
+    if (NVIGI_FAILED(res, polledInterface->releaseResults(&ttsContext, state))) {
+        LOG("Failed to release results, code %d", res);
+        break;
+    }
+    
+    // Check if inference is complete
+    if (state == nvigi::kInferenceExecutionStateDone) {
+        break;
+    }
+}
+
+// Clean up
+nvigiUnloadInterface(nvigi::plugin::tts::asqflow::ggml::cuda::kId, polledInterface);
+```
+
+### 4.3 MODERN C++ WRAPPER APPROACH
+
+The C++ wrapper provides both blocking and non-blocking (polling) approaches for audio generation:
+
+#### Blocking Mode with Callback:
+
+```cpp
+using namespace nvigi::tts;
+
+// Configure runtime parameters with builder pattern
+auto config = RuntimeConfig{}
+    .set_speed(1.0f)
+    .set_language("en")
+    .set_timesteps(16)
+    .set_flash_attention(true);
+
+// Create WAV writer
+WAVWriter wav_writer("output.wav");
+
+// Generate speech (blocking call with callback)
+auto result = instance->generate(
+    "Hello! This is a test of the text to speech system.",
+    "path/to/target_voice.bin",
+    config,
+    [&wav_writer](const int16_t* audio, size_t samples, ExecutionState state) -> ExecutionState {
+        // Called for each audio chunk
+        if (state == ExecutionState::DataPending || state == ExecutionState::Done) {
+            wav_writer.write_samples(audio, samples);
+            
+            // Optionally play audio in real-time (Windows only)
+            #ifdef NVIGI_WINDOWS
+            AudioPlayer::play_audio(audio, samples);
+            #endif
+            
+            if (state == ExecutionState::DataPending) {
+                std::cout << "." << std::flush;  // Progress indicator
+            }
+        }
+        
+        // Cancel if needed
+        if (should_stop) {
+            return ExecutionState::Cancel;
+        }
+        
+        return state;  // Continue normally
+    }
+);
+
+wav_writer.close();
+
+if (!result) {
+    std::cerr << "Error: " << result.error().what() << "\n";
+}
+```
+
+#### Non-Blocking Mode (Polling - Perfect for Game Loops!):
+
+```cpp
+using namespace nvigi::tts;
+
+// Configure runtime parameters
+auto config = RuntimeConfig{}
+    .set_speed(1.2f)
+    .set_language("en")
+    .set_timesteps(16);
+
+// Start async operation (non-blocking!)
+auto op = instance->generate_async(
+    "Hello! This is a test of the text to speech system.",
+    "path/to/target_voice.bin",
+    config
+).value();
+
+// Create WAV writer
+WAVWriter wav_writer("output.wav");
+
+// Game loop integration
+std::cout << "Generating";
+while (!op.is_complete()) {
+    // Try to get results (non-blocking - returns immediately!)
+    if (auto result = op.try_get_results()) {
+        if (!result->audio.empty()) {
+            // Write audio chunk to file
+            wav_writer.write_samples(result->audio.data(), result->audio.size());
+            
+            #ifdef NVIGI_WINDOWS
+            // Play audio in real-time if desired
+            AudioPlayer::play_audio(result->audio.data(), result->audio.size());
+            #endif
+            
+            if (result->state == ExecutionState::DataPending) {
+                std::cout << "." << std::flush;
+            }
+        }
+        
+        if (result->state == ExecutionState::Done) {
+            std::cout << " Done!\n";
+        } else if (result->state == ExecutionState::Invalid) {
+            std::cerr << "\nError during speech generation!\n";
+            break;
+        }
+    }
+    
+    // Game continues running smoothly!
+    // - Rendering at 60 FPS
+    // - Physics updates
+    // - Player input
+    render_frame();
+    update_physics();
+    process_input();
+    
+    // Optional: Cancel on user input
+    if (user_pressed_cancel()) {
+        op.cancel();
+    }
+    
+    // Small sleep to avoid busy-wait
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+}
+
+wav_writer.close();
+
+// Get all accumulated audio if needed
+auto full_audio = op.take_audio();
+std::cout << "Generated " << full_audio.size() << " audio samples\n";
+```
+
+The wrapper provides:
+- Clean lambda syntax with modern C++ types
+- Enum-based state management (`ExecutionState::Done`, `ExecutionState::Cancel`)
+- `std::expected` for error handling
+- Builder pattern for configuration
+- Automatic resource management
+- Game-loop friendly polling API
+- No manual memory management needed
 
 ## 5.0 PREPARE THE EXECUTION CONTEXT AND EXECUTE INFERENCE
 
@@ -444,6 +749,141 @@ tts_status.store(nvigi::kInferenceExecutionStateDataPending);
 > **IMPORTANT:**
 > The host app CANNOT assume that the inference callback will be invoked on the thread that calls `instance->evaluate`. In addition, inference (and thus callback invocations) is NOT guaranteed to be done when `instance->evaluate` returns.
 
+## 5.1 CANCELLING ASYNC EVALUATION
+
+When using `evaluateAsync`, you can cancel an ongoing inference operation early using the `cancelAsyncEvaluation` API. This is useful when you need to interrupt audio generation due to user actions (e.g., pressing ESC), timeouts, or changing contexts.
+
+The cancellation mechanism is designed to interrupt the evaluation loop as early as possible, including during text chunk processing.
+
+Here's how to cancel an async evaluation:
+
+```cpp
+// Start async evaluation for text-to-speech
+ttsContext.callback = nullptr;
+
+if (NVIGI_FAILED(res, ttsContext.instance->evaluateAsync(&ttsContext))) {
+    LOG("NVIGI async evaluation failed, code %d", res);
+    return;
+}
+
+// ... continue sending text chunks via evaluateAsync ...
+
+// User decides to cancel
+if (NVIGI_FAILED(res, ttsInstance->cancelAsyncEvaluation(&ttsContext))) {
+    if (res == kResultNoImplementation) {
+        LOG("No async evaluation is currently running");
+    } else {
+        LOG("Failed to cancel evaluation, code %d", res);
+    }
+}
+
+// The processing will stop as soon as possible
+// Continue polling to clean up
+nvigi::IPolledInferenceInterface* polledInterface{};
+nvigiGetInterface(nvigi::plugin::tts::asqflow::ggml::cuda::kId, &polledInterface);
+
+nvigi::InferenceExecutionState state;
+while (true) {
+    if (NVIGI_FAILED(res, polledInterface->getResults(&ttsContext, false, &state))) {
+        break;
+    }
+    
+    // Release any remaining results
+    polledInterface->releaseResults(&ttsContext, state);
+    
+    if (state == nvigi::kInferenceExecutionStateDone || 
+        state == nvigi::kInferenceExecutionStateInvalid) {
+        break;
+    }
+}
+
+nvigiUnloadInterface(nnvigi::plugin::tts::asqflow::ggml::cuda::kId, polledInterface);
+```
+
+#### Important Notes:
+
+- **`cancelAsyncEvaluation` returns `kResultNoImplementation`** if no async job is running (i.e., `evaluateAsync` was not called or the job has already completed)
+- The cancellation is **thread-safe** and can be called from any thread
+- After calling `cancelAsyncEvaluation`, continue polling with `getResults` to properly clean up any remaining resources
+- The evaluation loop checks for cancellation at **strategic points**:
+  - During the main async processing loop
+  - Before processing each text prompt
+  - Inside text chunk processing (between sentence chunks)
+
+#### Example: User-Initiated Cancellation During Generation
+
+```cpp
+// Track async state
+std::atomic<bool> userRequestedCancel = false;
+std::thread monitorThread;
+
+// Start monitoring for user input
+monitorThread = std::thread([&]() {
+    while (!userRequestedCancel) {
+        if (checkUserPressedEscape()) {
+            userRequestedCancel = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+});
+
+// Start TTS with polling
+ttsContext.callback = nullptr;
+
+std::vector<std::string> textChunks = getTextChunksFromLLM();
+for (size_t i = 0; i < textChunks.size(); i++) {
+    // Check if user wants to cancel
+    if (userRequestedCancel) {
+        ttsInstance->cancelAsyncEvaluation(&ttsContext);
+        LOG("User cancelled TTS processing");
+        break;
+    }
+    
+    // Send text chunk
+    inputTextData.buffer = textChunks[i].data();
+    inputTextData.sizeInBytes = textChunks[i].size();
+    
+    if (NVIGI_FAILED(res, ttsContext.instance->evaluateAsync(&ttsContext))) {
+        LOG("Failed to send text chunk");
+        break;
+    }
+}
+
+// Get polled interface
+nvigi::IPolledInferenceInterface* polledInterface{};
+nvigiGetInterface(nvigi::plugin::tts::asqflow::ggml::cuda::kId, &polledInterface);
+
+// Poll for any remaining results
+nvigi::InferenceExecutionState state;
+while (true) {
+    if (NVIGI_FAILED(res, polledInterface->getResults(&ttsContext, true, &state))) {
+        break;
+    }
+    
+    // Process partial results if available and not cancelled
+    if (ttsContext.outputs && !userRequestedCancel) {
+        const nvigi::InferenceDataByteArray* audioData{};
+        if (ttsContext.outputs->findAndValidateSlot(kTTSDataSlotOutputAudio, &audioData)) {
+            CpuData* cpuBuffer = castTo<CpuData>(audioData->bytes);
+            // Play audio chunk...
+        }
+    }
+    
+    polledInterface->releaseResults(&ttsContext, state);
+    
+    if (state == nvigi::kInferenceExecutionStateDone || 
+        state == nvigi::kInferenceExecutionStateInvalid) {
+        break;
+    }
+}
+
+nvigiUnloadInterface(nvigi::plugin::tts::asqflow::ggml::cuda::kId, polledInterface);
+monitorThread.join();
+```
+
+> **NOTE**: Cancellation via `cancelAsyncEvaluation` is only available for async evaluation started with `evaluateAsync`. For synchronous evaluation, use the callback return value mechanism (return `kInferenceExecutionStateCancel` from the callback) as described in section 4.1.
+
 ## 6.0 DESTROY INSTANCE(S)
 
 Once TTS is no longer needed each instance should be destroyed like this:
@@ -455,6 +895,61 @@ if(NVIGI_FAILED(res, ittsLocal.destroyInstance(ttsInstanceLocal)))
     LOG("NVIGI call failed, code %d", res);
 }
 ```
+
+### 6.1 MODERN C++ WRAPPER APPROACH
+
+The C++ wrapper uses RAII for automatic resource management - no manual cleanup needed:
+
+```cpp
+{
+    // Initialize core
+    nvigi::Core core({ .sdkPath = "path/to/sdk" });
+    
+    // Setup backend config (D3D12 or Vulkan)
+    auto deviceAndQueue = nvigi::d3d12::D3D12Helper::create_best_compute_device();
+    nvigi::d3d12::D3D12Config d3d12_config = {
+        .device = deviceAndQueue.device.Get(),
+        .command_queue = deviceAndQueue.compute_queue.Get(),
+        .create_committed_resource_callback = nvigi::d3d12::default_create_committed_resource,
+        .destroy_resource_callback = nvigi::d3d12::default_destroy_resource
+    };
+    
+    // Create TTS instance
+    auto instance = Instance::create(
+        ModelConfig{
+            .backend = "d3d12",
+            .guid = "{16EEB8EA-55A8-4F40-BECE-CE995AF44101}",
+            .model_path = "path/to/nvigi.models",
+            .num_threads = 8,
+            .vram_budget_mb = 2048,
+            .warm_up_models = true
+        },
+        d3d12_config,
+        {},  // empty vulkan config
+        core.loadInterface(),
+        core.unloadInterface()
+    ).value();
+    
+    // Use instance for TTS generation...
+    auto result = instance->generate(
+        "Hello world",
+        "target_voice.bin",
+        RuntimeConfig{}.set_speed(1.0f)
+    );
+    
+    // Automatic cleanup when leaving scope!
+    // 1. instance destructor -> calls destroyInstance() and unloads interfaces
+    // 2. core destructor -> calls nvigiShutdown()
+}
+// All resources cleaned up automatically - no manual calls needed!
+```
+
+**Key Benefits:**
+- No manual `destroyInstance()` calls needed
+- No manual `nvigiUnloadInterface()` calls needed
+- Exception-safe: cleanup happens even if exceptions are thrown
+- Impossible to forget cleanup or get order wrong
+- Reference counting ensures interfaces stay valid while in use
 
 ## 7.0 AVAILABLE FEATURES IN ASQFLOW TTS
 
@@ -533,6 +1028,213 @@ For the word "NVIDIA":
 - Custom dictionary entries will override default dictionary entries for the same word
 - Words not found in either dictionary will use the neural G2P model for pronunciation prediction
 - The system first checks the custom dictionary, then the default dictionary, then falls back to G2P
+
+## 7.1 COMPLETE MODERN C++ EXAMPLE
+
+Here's a complete example using the modern C++ wrapper that demonstrates both sync and async modes:
+
+```cpp
+#include <iostream>
+#include <format>
+#include <chrono>
+#include <thread>
+
+// NVIGI includes
+#include <nvigi.h>
+#include "nvigi_tts.h"
+#include "nvigi_d3d12.h"
+#include "nvigi_vulkan.h"
+
+// C++ wrappers
+#include "core.hpp"
+#include "d3d12.hpp"
+#include "vulkan.hpp"
+#include "tts.hpp"
+
+using namespace nvigi::tts;
+
+int main(int argc, char** argv) {
+    try {
+        // Initialize NVIGI core
+        nvigi::Core core({ 
+            .sdkPath = "path/to/sdk", 
+            .logLevel = nvigi::LogLevel::eDefault, 
+            .showConsole = true 
+        });
+
+        // Print system info
+        core.getSystemInfo().print();
+
+        // Setup backend (D3D12 example)
+        auto deviceAndQueue = nvigi::d3d12::D3D12Helper::create_best_compute_device();
+        nvigi::d3d12::D3D12Config d3d12_config = {
+            .device = deviceAndQueue.device.Get(),
+            .command_queue = deviceAndQueue.compute_queue.Get(),
+            .create_committed_resource_callback = nvigi::d3d12::default_create_committed_resource,
+            .destroy_resource_callback = nvigi::d3d12::default_destroy_resource
+        };
+
+        // Create TTS instance
+        std::cout << "\n=== Creating TTS Instance ===\n";
+        auto instance = Instance::create(
+            ModelConfig{
+                .backend = "d3d12",
+                .guid = "{16EEB8EA-55A8-4F40-BECE-CE995AF44101}",  // FP16 model
+                .model_path = "path/to/nvigi.models",
+                .num_threads = 8,
+                .vram_budget_mb = 2048,
+                .warm_up_models = true
+            },
+            d3d12_config,
+            {},  // empty vulkan config
+            core.loadInterface(),
+            core.unloadInterface()
+        ).value();
+
+        std::cout << "TTS instance created successfully!\n";
+
+        // Print supported languages
+        auto supported_langs = instance->get_supported_languages();
+        if (!supported_langs.empty()) {
+            std::cout << "Supported Languages: ";
+            for (size_t i = 0; i < supported_langs.size(); ++i) {
+                std::cout << supported_langs[i];
+                if (i < supported_langs.size() - 1) std::cout << ", ";
+            }
+            std::cout << "\n\n";
+        }
+
+        // Example 1: Synchronous (Blocking) Mode
+        {
+            std::cout << "=== Sync Mode Example ===\n";
+            
+            // Configure runtime parameters
+            auto config = RuntimeConfig{}
+                .set_speed(1.0f)
+                .set_language("en")
+                .set_timesteps(16)
+                .set_flash_attention(true);
+
+            // Create WAV writer
+            WAVWriter wav_writer("output_sync.wav");
+            
+            size_t total_samples = 0;
+            auto start_time = std::chrono::steady_clock::now();
+
+            // Generate speech (blocking with callback)
+            auto result = instance->generate(
+                "Hello! This is a test of the text to speech system.",
+                "path/to/target_voice.bin",
+                config,
+                [&wav_writer, &total_samples](const int16_t* audio, size_t samples, ExecutionState state) -> ExecutionState {
+                    if (state == ExecutionState::DataPending || state == ExecutionState::Done) {
+                        wav_writer.write_samples(audio, samples);
+                        total_samples += samples;
+                        
+                        if (state == ExecutionState::DataPending) {
+                            std::cout << "." << std::flush;
+                        }
+                    }
+                    return state;
+                }
+            );
+
+            wav_writer.close();
+            
+            auto end_time = std::chrono::steady_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+
+            if (result) {
+                std::cout << " Done!\n";
+                std::cout << "Total Samples: " << total_samples << "\n";
+                std::cout << "Duration: " << (total_samples / static_cast<float>(kSampleRate)) << " seconds\n";
+                std::cout << "Generation Time: " << (duration.count() / 1000.0f) << " seconds\n\n";
+            } else {
+                std::cerr << "Error: " << result.error().what() << "\n\n";
+            }
+        }
+
+        // Example 2: Asynchronous (Polling) Mode
+        {
+            std::cout << "=== Async Mode Example (Game-Loop Friendly) ===\n";
+            
+            auto config = RuntimeConfig{}
+                .set_speed(1.2f)
+                .set_language("en")
+                .set_timesteps(16);
+
+            // Start async operation
+            auto op = instance->generate_async(
+                "This is an asynchronous test. The main thread can continue working.",
+                "path/to/target_voice.bin",
+                config
+            ).value();
+
+            WAVWriter wav_writer("output_async.wav");
+            size_t total_samples = 0;
+            auto start_time = std::chrono::steady_clock::now();
+
+            std::cout << "Generating";
+            
+            // Game loop style
+            while (!op.is_complete()) {
+                // Try to get results (non-blocking!)
+                if (auto result = op.try_get_results()) {
+                    if (!result->audio.empty()) {
+                        wav_writer.write_samples(result->audio.data(), result->audio.size());
+                        total_samples += result->audio.size();
+                        
+                        if (result->state == ExecutionState::DataPending) {
+                            std::cout << "." << std::flush;
+                        }
+                    }
+                    
+                    if (result->state == ExecutionState::Done) {
+                        std::cout << " Done!\n";
+                    } else if (result->state == ExecutionState::Invalid) {
+                        std::cerr << "\nError during generation!\n";
+                        break;
+                    }
+                }
+
+                // Simulate game loop work
+                // In real game: render_frame(), update_physics(), process_input()
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+
+            wav_writer.close();
+            
+            auto end_time = std::chrono::steady_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+
+            std::cout << "Total Samples: " << total_samples << "\n";
+            std::cout << "Duration: " << (total_samples / static_cast<float>(kSampleRate)) << " seconds\n";
+            std::cout << "Generation Time: " << (duration.count() / 1000.0f) << " seconds\n\n";
+        }
+
+        std::cout << "=== All Examples Complete ===\n";
+        
+        // Automatic cleanup when leaving scope!
+        
+    } catch(const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return -1;
+    }
+
+    return 0;
+}
+```
+
+This complete example demonstrates:
+- Core initialization with modern C++ wrapper
+- Backend setup (D3D12 in this case)
+- TTS instance creation with builder pattern
+- Querying supported languages
+- Synchronous (blocking) speech generation with callbacks
+- Asynchronous (polling) speech generation for game loops
+- WAV file output
+- Error handling with `std::expected`
+- Automatic resource cleanup with RAII
 
 ## 8.0 KNOWN LIMITATIONS
 

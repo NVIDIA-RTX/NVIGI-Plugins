@@ -481,6 +481,12 @@ nvigi::Result ASqFlow::evaluate(const InferenceParameters &inferParams, Internal
     std::vector<std::wstring> full_phones;
     for (const std::string &textPieceNormalized : sentencesSplit)
     {
+        // Check for cancellation request
+        if (inferParams.cancelled && inferParams.cancelled->load())
+        {
+            NVIGI_LOG_VERBOSE("TTS chunk processing cancelled by user request");
+            return nvigi::kResultOk;
+        }
 
         std::vector<std::wstring> phones;
         std::vector<int> inputNetPhonesTextToGen;
@@ -526,6 +532,13 @@ nvigi::Result ASqFlow::evaluate(const InferenceParameters &inferParams, Internal
             NVIGI_LOG_ERROR("Error while converting graph to phonemes: %s", e.what());
             callback(outputAudio, textPieceNormalized, InferenceState::ERROR_HAPPENED);
             return kResultInvalidState;
+        }
+
+        // Check for cancellation after g2p
+        if (inferParams.cancelled && inferParams.cancelled->load())
+        {
+            NVIGI_LOG_VERBOSE("TTS chunk processing cancelled after g2p");
+            return nvigi::kResultOk;
         }
 
         // Duration predictor inference
@@ -583,6 +596,13 @@ nvigi::Result ASqFlow::evaluate(const InferenceParameters &inferParams, Internal
         end_inf1 = std::chrono::high_resolution_clock::now();
         storeExecutionTime(timers, start_inf1, end_inf1, "Generator Model inference");
 
+        // Check for cancellation after generator model
+        if (inferParams.cancelled && inferParams.cancelled->load())
+        {
+            NVIGI_LOG_VERBOSE("TTS chunk processing cancelled after generator model");
+            return nvigi::kResultOk;
+        }
+
         // Vocoder inference
         start_inf1 = std::chrono::high_resolution_clock::now();
         std::vector<int16_t> outputAudio;
@@ -594,6 +614,13 @@ nvigi::Result ASqFlow::evaluate(const InferenceParameters &inferParams, Internal
         }
         end_inf1 = std::chrono::high_resolution_clock::now();
         storeExecutionTime(timers, start_inf1, end_inf1, "Vocoder Model inference");
+
+        // Check for cancellation after vocoder model
+        if (inferParams.cancelled && inferParams.cancelled->load())
+        {
+            NVIGI_LOG_VERBOSE("TTS chunk processing cancelled after vocoder model");
+            return nvigi::kResultOk;
+        }
 
         if (indexPiece == sentencesSplit.size() - 1)
         {

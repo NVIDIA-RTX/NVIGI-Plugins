@@ -93,7 +93,12 @@ struct whisper_params {
     bool print_progress = false;
     bool no_timestamps = false;
     bool no_context = true;
-    bool low_vram = false;
+    bool suppressBlank = true; // if true, suppresses the blank token in the output
+    bool suppressNonSpeechTokens{}; // if true, suppresses all non-speech tokens in the output
+    float temperature{}; // temperature for sampling, 0.0 = greedy, higher values = more random
+    float entropyThold = 2.4f; // threshold for entropy-based suppression, 0.0 = disabled
+    float logprobThold = -1.0f; // threshold for log-probability-based suppression, 0.0 = disabled
+    float noSpeechThold = 0.6f; // threshold for no-speech detection, 0.0 = disabled
 
     std::string language = "en";
     std::string prompt;

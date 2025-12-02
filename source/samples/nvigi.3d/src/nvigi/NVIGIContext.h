@@ -141,6 +141,7 @@ struct NVIGIContext
         std::condition_variable m_callbackCV;
         std::atomic<nvigi::InferenceExecutionState> m_callbackState;
         size_t m_vramBudget{};
+        bool m_automaticBackendSelection = false;
     };
 
     NVIGIContext() {}
@@ -176,7 +177,7 @@ struct NVIGIContext
         StageInfo& stage,
         NVIGIContext::PluginModelInfo*& value);
     bool SelectAutoPlugin(const StageInfo& stage, const std::vector<PluginModelInfo*>& options, PluginModelInfo*& model);
-    bool BuildModelsSelectUI();
+    bool BuildOptionsUI();
     void BuildModelsStatusUI();
     void BuildChatUI();
     void BuildUI();
@@ -336,9 +337,6 @@ struct NVIGIContext
     std::vector<uint8_t> m_wavRecording;
     bool m_conversationInitialized = false;
     std::atomic<bool> m_ttsInputReady = false;
-
-    bool m_modelSettingsOpen = false;
-    bool m_automaticBackendSelection = false;
 
     std::thread* m_inferThread{};
     std::atomic<bool> m_inferThreadRunning = false;

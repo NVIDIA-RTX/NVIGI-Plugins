@@ -33,6 +33,8 @@
 #include "ggml-opencl.h"
 #endif
 
+#define COMPILE_VLM true
+
 // Begin NVIDIA Modification
 #include "source/core/nvigi.log/log.h"
 #define LOG(fmt,...)
@@ -44,13 +46,16 @@
 // End NVIDIA Modification
 
 #include "llama.h"
+#include "llama-context.h"
 #include "common.h"
 #include "chat.h"
 //#include "log.h"
 #include "sampling.h"
 // Begin VLM Addition
-#include "clip.h"
-#include "llava.h"
+#include "mtmd-helper.h"
+#if COMPILE_VLM
+#include "mtmd.h"
+#endif // COMPILE_VLM
 // End VLM Addition
 
 #include "external/json/source/nlohmann/json.hpp"
@@ -137,18 +142,24 @@ struct InferenceContextSync
     std::condition_variable cvInput;
     std::condition_variable cvDone;
     std::string input;
+
     // Begin VLM Addition
+#if COMPILE_VLM
     const unsigned char* rgb_data;
     int rgb_width;
     int rgb_height;
+#endif // COMPILE_VLM
     // End VLM Addition
+
     std::atomic<bool> runningChat = false;
     std::atomic<bool> newInput = false;
     std::atomic<bool> silenceOutput = false;
     std::atomic<bool> persistentKVCache = false;
+    std::atomic<bool> cancelled = false;  // Flag to request early cancellation
     nvigi::InferenceExecutionContext* execCtx;
     std::vector<llama_token> cachedTokens;
     TokenGenLimiter* tgLimiter = nullptr;
+    std::string assistant;
 };
 
 #ifdef GGML_USE_CUBLAS
@@ -179,16 +190,28 @@ using internalCallback = std::function<nvigi::InferenceExecutionState(nvigi::Inf
 // Added common_params as an input parameter instead of a global static
 static std::string chat_add_and_format(common_params* g_params, struct llama_model* model, std::vector<common_chat_msg>& chat_msgs, common_chat_templates* chat_templates, const std::string& role, const std::string& content) {
     common_chat_msg new_msg{ role, content };
-    bool use_jinja = false;
-    auto formatted = common_chat_format_single(chat_templates, chat_msgs, new_msg, role == "user", use_jinja);
+    auto formatted = common_chat_format_single(chat_templates, chat_msgs, new_msg, role == "user", g_params->use_jinja);
     chat_msgs.push_back({ role, content });
     LOG_DBG("formatted: '%s'\n", formatted.c_str());
     return formatted;
 }
 // End NVIDIA Modification
 
+//! Report stats
+void reportStats(llama_context* ctx, common_sampler* smpl)
+{
+    const auto timings = llama_perf_context(ctx);
+    const auto smpl_timings = llama_perf_sampler(smpl->chain);
+    double t_end_ms = 1e-3 * ggml_time_us();
+
+    NVIGI_LOG_INFO("timings:sample %s", extra::format("{} ms / {} runs ({} ms/token, {} tokens/second)", smpl_timings.t_sample_ms, smpl_timings.n_sample, smpl_timings.t_sample_ms / smpl_timings.n_sample, 1e3 / smpl_timings.t_sample_ms * smpl_timings.n_sample).c_str());
+    NVIGI_LOG_INFO("timings:prompt %s", extra::format("{} ms / {} tokens ({} ms/token, {} tokens/second)", timings.t_p_eval_ms, timings.n_p_eval, timings.t_p_eval_ms / timings.n_p_eval, 1e3 / timings.t_p_eval_ms * timings.n_p_eval).c_str());
+    NVIGI_LOG_INFO("timings:eval   %s", extra::format("{} ms / {} runs ({} ms/token, {} tokens/second)", timings.t_eval_ms, timings.n_eval, timings.t_eval_ms / timings.n_eval, 1e3 / timings.t_eval_ms * timings.n_eval).c_str());
+    NVIGI_LOG_INFO("timings:total  %s", extra::format("{}ms", (t_end_ms - timings.t_start_ms)).c_str());
+}
+
 //! Local generate function, not needed when running on cloud
-int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx, clip_ctx* clip_context, common_params& params, internalCallback callback)
+int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx, mtmd_context* clip_context, common_params& params, internalCallback callback)
 {
     try
     {
@@ -205,11 +228,17 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
         const int n_ctx_train = llama_model_n_ctx_train(model);
         const int n_ctx = llama_n_ctx(ctx);
 
+        llama_memory_t mem = ctx->get_memory();
+
         common_sampler* smpl = nullptr;
 
         std::vector<common_chat_msg> chat_msgs;
 
         // Begin NVIDIA Modification
+        
+        // Reset performance counters to ensure that stats are for this call to generate() only
+        llama_perf_context_reset(ctx);
+
         // Originally a LOG, but that was sending spurious output to the console, so changing to LOG_INF, which I think it should be anyways
         LOG_INF("n_ctx: %d\n", n_ctx);
         // End NVIDIA Modification
@@ -256,7 +285,7 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
             LOG_INF("%s\n", common_params_get_system_info(params).c_str());
             LOG_INF("\n");
         }
-        std::string path_session;
+        std::string path_session = params.path_prompt_cache;
         // Begin NVIDIA Modification
         if (!params.path_prompt_cache.empty() && !file::getOSValidDirectoryPath(params.path_prompt_cache.c_str(), path_session))
         {
@@ -323,18 +352,47 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
 
         bool waiting_for_first_input = false;
 
+        // Begin NVIDIA Modification
+        // chat_add_and_format modified to take params
+        std::string prompt;
         {
-            // Begin NVIDIA Modification
-            // chat_add_and_format modified to take params
-            auto prompt = (params.conversation_mode && params.enable_chat_template && !params.prompt.empty())
-                ? chat_add_and_format(&params, model, chat_msgs, chat_templates.get(), "system", params.prompt) // format the system prompt in conversation mode
-                : params.prompt;
-            // End NVIDIA Modification
+            if (params.conversation_mode && params.enable_chat_template) {
+                if (!params.system_prompt.empty()) {
+                    // format the system prompt (will use template default if empty)
+                    chat_add_and_format(&params, model, chat_msgs, chat_templates.get(), "system", params.system_prompt);
+                }
 
-            if (params.interactive_first || !params.prompt.empty() || session_tokens.empty()) {
+                if (!params.prompt.empty()) {
+                    // format and append the user prompt
+                    chat_add_and_format(&params, model, chat_msgs, chat_templates.get(), "user", params.prompt);
+                }
+                else {
+                    waiting_for_first_input = true;
+                }
+
+                if (!sync->assistant.empty()) {
+                    // format and append the assistant prompt
+                    chat_add_and_format(&params, model, chat_msgs, chat_templates.get(), "assistant", sync->assistant);
+                }
+
+                if (!params.system_prompt.empty() || !params.prompt.empty()) {
+                    common_chat_templates_inputs inputs;
+                    inputs.messages = chat_msgs;
+                    inputs.add_generation_prompt = !params.prompt.empty();
+
+                    prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
+                }
+            }
+            else {
+                // otherwise use the prompt as is
+                prompt = params.system_prompt + params.prompt;
+            }
+
+            if (params.interactive_first || !prompt.empty() || session_tokens.empty()) {
                 LOG_DBG("tokenize the prompt\n");
-                embd_inp = common_tokenize(ctx, prompt, add_bos, true);
-            } else {
+                embd_inp = common_tokenize(ctx, prompt, true, true);
+            }
+            else {
                 LOG_DBG("use session tokens\n");
                 embd_inp = session_tokens;
             }
@@ -342,6 +400,7 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
             LOG_DBG("prompt: \"%s\"\n", prompt.c_str());
             LOG_DBG("tokens: %s\n", string_from(ctx, embd_inp).c_str());
         }
+        // End NVIDIA Modification
 
         // Should not run without any tokens
         if (!waiting_for_first_input && embd_inp.empty()) {
@@ -382,7 +441,7 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
             }
 
             // remove any "future" tokens that we might have inherited from the previous session
-            llama_kv_self_seq_rm(ctx, -1, n_matching_session_tokens, -1);
+            llama_memory_seq_rm(mem, -1, n_matching_session_tokens, -1);
         }
 
         LOG_DBG("recalculate the cached logits (check): embd_inp.size() %zu, n_matching_session_tokens %zu, embd_inp.size() %zu, session_tokens.size() %zu\n",
@@ -525,6 +584,14 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
         // Was a global static in original code, can be a local scoped variable here.
         bool is_interacting = false;
         bool need_insert_eot = false;
+        // Make sure we don't leak sampler on early returns
+        extra::ScopedTasks cleanupOnReturn([smpl]()->void {
+            // Sampler has to die here, as perf reporting requires it earlier.  We create/delete every generate as runtime parameters could theoretically 
+            // change the sampler parameters per evaluate call so we can't store sampler as an instance parameter.  
+            // See gpt.cpp ggmlEvaluate runtimeParameters
+            common_sampler_free(smpl);
+            });
+
         // End NVIDIA Modifications
 
         if (params.interactive) {
@@ -582,6 +649,7 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
 
         // Begin NVIDIA Modifications
         // // Begin VLM Addition
+#if COMPILE_VLM
         // 
         // image_marker_embd is a marker that we will use to check where the image has been placed in the prompt.  It's a list of integers (token_ids)
         // 
@@ -603,6 +671,7 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
         // 
         // We tokenize here to do it once per generate call instead of once per input.
         std::vector<llama_token> image_marker_embd = common_tokenize(ctx, "NVIGI_IMG", false, true);
+#endif // COMPILE_VLM
         // // End VLM Addition
         // End NVIDIA Modifications
         
@@ -634,6 +703,13 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
         }
 
         while ((n_remain != 0 && !is_antiprompt) || params.interactive) {
+            // Begin NVIDIA Modification - Check for cancellation request
+            if (sync->cancelled.load()) {
+                LOG_DBG("Generation cancelled by user request\n");
+                return 0;
+            }
+            // End NVIDIA Modification
+            
             // predict
             if (!embd.empty()) {
                 // Note: (n_ctx - 4) here is to match the logic for commandline prompt handling via
@@ -676,8 +752,8 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
                         LOG_DBG("context full, swapping: n_past = %d, n_left = %d, n_ctx = %d, n_keep = %d, n_discard = %d\n",
                             n_past, n_left, n_ctx, params.n_keep, n_discard);
 
-                        llama_kv_self_seq_rm(ctx, 0, params.n_keep, params.n_keep + n_discard);
-                        llama_kv_self_seq_add(ctx, 0, params.n_keep + n_discard, n_past, -n_discard);
+                        llama_memory_seq_rm (mem, 0, params.n_keep            , params.n_keep + n_discard);
+                        llama_memory_seq_add(mem, 0, params.n_keep + n_discard, n_past, -n_discard);
 
                         n_past -= n_discard;
 
@@ -700,9 +776,9 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
                         LOG_DBG("div:   [%6d, %6d] / %6d -> [%6d, %6d]\n", ga_i + ib * bd, ga_i + ib * bd + ga_w, ga_n, (ga_i + ib * bd) / ga_n, (ga_i + ib * bd + ga_w) / ga_n);
                         LOG_DBG("shift: [%6d, %6d] + %6d -> [%6d, %6d]\n", ga_i + ib * bd + ga_w, n_past + ib * bd, dd, ga_i + ib * bd + ga_w + dd, n_past + ib * bd + dd);
 
-                        llama_kv_self_seq_add(ctx, 0, ga_i, n_past, ib * bd);
-                        llama_kv_self_seq_div(ctx, 0, ga_i + ib * bd, ga_i + ib * bd + ga_w, ga_n);
-                        llama_kv_self_seq_add(ctx, 0, ga_i + ib * bd + ga_w, n_past + ib * bd, dd);
+                        llama_memory_seq_add(mem, 0, ga_i,                n_past,              ib*bd);
+                        llama_memory_seq_div(mem, 0, ga_i + ib*bd,        ga_i + ib*bd + ga_w, ga_n);
+                        llama_memory_seq_add(mem, 0, ga_i + ib*bd + ga_w, n_past + ib*bd,      dd);
 
                         n_past -= bd;
 
@@ -716,6 +792,13 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
                 if (n_session_consumed < (int)session_tokens.size()) {
                     size_t i = 0;
                     for (; i < embd.size(); i++) {
+                        // Begin NVIDIA Modification - Check for cancellation in session token matching loop
+                        if (sync->cancelled.load()) {
+                            LOG_DBG("Generation cancelled during session token matching\n");
+                            return 0;
+                        }
+                        // End NVIDIA Modification
+                        
                         if (embd[i] != session_tokens[n_session_consumed]) {
                             session_tokens.resize(n_session_consumed);
                             break;
@@ -735,39 +818,38 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
                 }
 
                 // Begin NVIDIA Modification 
-
                 // Begin VLM Modification
-
+#if ! COMPILE_VLM
                 // Original code without VLM:
-                //for (int i = 0; i < (int)embd.size(); i += params.n_batch) {
-                //    int n_eval = (int)embd.size() - i;
-                //    if (n_eval > params.n_batch) {
-                //        n_eval = params.n_batch;
-                //    }
+                for (int i = 0; i < (int)embd.size(); i += params.n_batch) {
+                    int n_eval = (int)embd.size() - i;
+                    if (n_eval > params.n_batch) {
+                        n_eval = params.n_batch;
+                    }
 
-                //    LOG_DBG("eval: %s\n", string_from(ctx, embd).c_str());
+                    LOG_DBG("eval: %s\n", string_from(ctx, embd).c_str());
 
-                //    if (llama_decode(ctx, llama_batch_get_one(&embd[i], n_eval))) {
-                //        LOG_ERR("%s : failed to eval\n", __func__);
-                //        return 1;
-                //    }
+                    if (llama_decode(ctx, llama_batch_get_one(&embd[i], n_eval))) {
+                        LOG_ERR("%s : failed to eval\n", __func__);
+                        return 1;
+                    }
 
-                //    // BEGIN NVIDIA Modifications
-                //    if (sync->tgLimiter)
-                //    {
-                //        sync->tgLimiter->sleep();
-                //    }
-                //    // END NVIDIA Modifications
+                    // BEGIN NVIDIA Modifications
+                    if (sync->tgLimiter)
+                    {
+                        sync->tgLimiter->sleep();
+                    }
+                    // END NVIDIA Modifications
 
-                //    n_past += n_eval;
+                    n_past += n_eval;
 
-                //    LOG_DBG("n_past = %d\n", n_past);
-                //    // Display total tokens alongside total time
-                //    if (params.n_print > 0 && n_past % params.n_print == 0) {
-                //        LOG_DBG("\n\033[31mTokens consumed so far = %d / %d \033[0m\n", n_past, n_ctx);
-                //    }
-                //}
-
+                    LOG_DBG("n_past = %d\n", n_past);
+                    // Display total tokens alongside total time
+                    if (params.n_print > 0 && n_past % params.n_print == 0) {
+                        LOG_DBG("\n\033[31mTokens consumed so far = %d / %d \033[0m\n", n_past, n_ctx);
+                    }
+                }
+#else // COMPILE_VLM
                 // VLM Modified Code:
 
                 // Breaking up the embd inst segments seperated by NVIGI_IMG.  NVIGI_IMGs are spliced into the 
@@ -782,6 +864,13 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
                 {
                     // look for our image marker in embd
                     for (int i = 0; i < (int)embd.size(); i++) {
+                        // Begin NVIDIA Modification - Check for cancellation in image marker search loop
+                        if (sync->cancelled.load()) {
+                            LOG_DBG("Generation cancelled during image marker search\n");
+                            return 0;
+                        }
+                        // End NVIDIA Modification
+                        
                         if (image_marker_embd[match_index] == embd[i])
                             match_index++;
                         else
@@ -816,12 +905,26 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
 
                 for (int seg_idx = 0; seg_idx < segments.size(); seg_idx++)
                 {
+                    // Begin NVIDIA Modification - Check for cancellation in segment loop
+                    if (sync->cancelled.load()) {
+                        LOG_DBG("Generation cancelled during segment processing\n");
+                        return 0;
+                    }
+                    // End NVIDIA Modification
+                    
                     std::pair<int, size_t> seg_start_size = segments[seg_idx];
                     int seg_start_index = seg_start_size.first;
                     size_t seg_size = seg_start_size.second;
                     if (seg_start_index != image_start_index)
                     {
                         for (int i = seg_start_index; i < seg_start_index + seg_size; i += params.n_batch) {
+                            // Begin NVIDIA Modification - Check for cancellation in batch loop
+                            if (sync->cancelled.load()) {
+                                LOG_DBG("Generation cancelled during batch processing\n");
+                                return 0;
+                            }
+                            // End NVIDIA Modification
+                            
                             int n_eval = (int)seg_size - (i - seg_start_index);
                             if (n_eval > params.n_batch) {
                                 n_eval = params.n_batch;
@@ -857,23 +960,50 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
 
                         if (clip_context != nullptr && sync->rgb_data != nullptr && sync->rgb_height > 0 && sync->rgb_width > 0)
                         {
-                            llava_image_embed image_embed;
-                            clip_image_u8* clip_img = clip_image_u8_init();
-                            clip_build_img_from_pixels(sync->rgb_data, sync->rgb_width, sync->rgb_height, clip_img);
-
-                            bool image_embed_result = llava_image_embed_make_with_clip_img(clip_context, params.cpuparams.n_threads, clip_img, &(image_embed.embed), &(image_embed.n_image_pos));
-                            clip_image_u8_free(clip_img);
-                            if (image_embed_result)
-                            {
-                                llava_eval_image_embed(ctx, &image_embed, params.n_batch, &n_past);
-                                free(image_embed.embed);
-                            }
                             // in the case of a failed embedding, we do nothing, so answers shouldn't adhere to any picture or will be hallucinated.
+                            mtmd_bitmap * mtmd_image = mtmd_bitmap_init(sync->rgb_width, sync->rgb_height, sync->rgb_data);
+
+                            // Embed
+                            mtmd_input_text text;
+                            text.text          = "<__media__>";
+                            text.add_special   = add_bos;
+                            text.parse_special = true;
+                            mtmd::input_chunks chunks(mtmd_input_chunks_init());
+                            int32_t res = mtmd_tokenize(clip_context,
+                                                chunks.ptr.get(), // output
+                                                &text, // text
+                                                (const mtmd_bitmap**)&mtmd_image,
+                                                1);
+                            if (res != 0) {
+                                LOG_ERR("Unable to tokenize prompt, res = %d\n", res);
+                                return 1;
+                            }
+
+                            // Release memory allocated by mtmd_bitmap_init
+                            mtmd_bitmap_free( mtmd_image );
+
+                            // Eval
+                            llama_pos new_n_past;
+                            if (mtmd_helper_eval_chunks(clip_context,
+                                        ctx, // text model context
+                                        chunks.ptr.get(), // chunks
+                                        n_past, // n_past
+                                        0, // seq_id
+                                        params.n_batch, // n_batch
+                                        true, // logits_last
+                                        &new_n_past)) {
+                                LOG_ERR("Unable to eval prompt\n");
+                                return 1;
+                            }
+                            n_past = new_n_past;
+
+                            // mtmd_input_chunks allocated in mtmd_input_chunks_init should have been assigned to a unique pointer
+                            // and be freed by the mtmd_input_chunks_deleter on chunks destruction.
                         }
                     }
                 }
+#endif // ! COMPILE_VLM
                 // End VLM Modification
-
                 // End NVIDIA Modification
 
                 // Begin NVIDIA Modifications
@@ -885,6 +1015,13 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
             }
 
             embd.clear();
+            
+            // Begin NVIDIA Modification - Check for cancellation after evaluation
+            if (sync->cancelled.load()) {
+                LOG_DBG("Generation cancelled by user request after evaluation\n");
+                return 0;
+            }
+            // End NVIDIA Modification
 
             if ((int)embd_inp.size() <= n_consumed && !is_interacting) {
                 // optionally save the session on first sample (for faster prompt loading next time)
@@ -909,6 +1046,10 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
                 // LOG_DBG("last: %s\n", string_from(ctx, smpl->prev.to_vector()).c_str());
 
                 embd.push_back(id);
+
+                if (params.conversation_mode && !waiting_for_first_input && !llama_vocab_is_eog(vocab, id)) {
+                    assistant_ss << common_token_to_piece(ctx, id, false);
+                }
 
                 // Begin NVIDIA Modifications
                 // echo this to console  but only if not system prompt processing (setting up the chat)
@@ -939,6 +1080,13 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
             // display text
             if (input_echo && display) {
                 for (auto id : embd) {
+                    // Begin NVIDIA Modification - Check for cancellation in display loop
+                    if (sync->cancelled.load()) {
+                        LOG_DBG("Generation cancelled during token display\n");
+                        return 0;
+                    }
+                    // End NVIDIA Modification
+                    
                     const std::string token_str = common_token_to_piece(ctx, id, params.special);
 
                     // Begin NVIDIA Modifications
@@ -1004,14 +1152,17 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
                     }
 
                     // check for reverse prompt using special tokens
-                    llama_token last_token = common_sampler_last(smpl);
-                    for (auto token : antiprompt_token) {
-                        if (token == last_token) {
-                            if (params.interactive) {
-                                is_interacting = true;
+                    // avoid calling common_sampler_last() if last_output is empty
+                    if (!last_output.empty()) {
+                        llama_token last_token = common_sampler_last(smpl);
+                        for (auto token : antiprompt_token) {
+                            if (token == last_token) {
+                                if (params.interactive) {
+                                    is_interacting = true;
+                                }
+                                is_antiprompt = true;
+                                break;
                             }
-                            is_antiprompt = true;
-                            break;
                         }
                     }
 
@@ -1045,11 +1196,8 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
 
                 // if current token is not EOG, we add it to current assistant message
                 if (params.conversation_mode && !waiting_for_first_input) {
-                    const auto id = common_sampler_last(smpl);
-                    assistant_ss << common_token_to_piece(ctx, id, false);
-
-                    if (!params.prompt.empty()) {
-                        params.prompt.clear();
+                    if (!prompt.empty()) {
+                        prompt.clear();
                         is_interacting = false;
                     }
                 }
@@ -1084,6 +1232,10 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
                     // Custom code used to signal to the user when data is available.
                     sync->cvDone.notify_one();
 
+#ifndef NVIGI_PRODUCTION
+                    // End of turn, print performance stats
+                    reportStats(ctx, smpl);
+#endif
                     // inform user that we are done with our turn
                     auto _res = callback(sync->execCtx, 0, "", nvigi::kInferenceExecutionStateDone);
                     if (_res == nvigi::kInferenceExecutionStateCancel || _res == nvigi::kInferenceExecutionStateInvalid)
@@ -1166,10 +1318,19 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
                         embd_inp.insert(embd_inp.end(), line_inp.begin(), line_inp.end());
                         embd_inp.insert(embd_inp.end(), line_sfx.begin(), line_sfx.end());
 
+                        if (params.verbose_prompt) {
+                            LOG_INF("%s: number of tokens in prompt = %zu\n", __func__, embd_inp.size() - original_size);
+                        }
+
                         for (size_t i = original_size; i < embd_inp.size(); ++i) {
                             const llama_token token = embd_inp[i];
+                            const std::string token_str = common_token_to_piece(ctx, token);
                             output_tokens.push_back(token);
-                            output_ss << common_token_to_piece(ctx, token);
+                            output_ss << token_str;
+
+                            if (params.verbose_prompt) {
+                                LOG_INF("%6d -> '%s'\n", token, token_str.c_str());
+                            }
                         }
 
                         // reset assistant message
@@ -1219,7 +1380,7 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
         // This clears the conversation cache.  This allows us to have different conversations.
         if (!sync->persistentKVCache)
         {
-            llama_kv_self_clear(ctx);
+            llama_memory_clear(mem, true);
         }
         // End NVIDIA Modification
 
@@ -1231,21 +1392,8 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
         // Begin NVIDIA Modification
         // Additional timing related storage for later retrieval
         const auto timings = llama_perf_context(ctx);
-#ifndef NVIGI_PRODUCTION
-
         callback(sync->execCtx, 0, "", nvigi::kInferenceExecutionStateDone);
 
-        //common_perf_print(ctx, smpl);
-        const auto smpl_timings = llama_perf_sampler(smpl->chain);
-        double t_end_ms = 1e-3 * ggml_time_us();
-
-        NVIGI_LOG_INFO("timings:sample %s", extra::format("{} ms / {} runs ({} ms/token, {} tokens/second)", smpl_timings.t_sample_ms, smpl_timings.n_sample, smpl_timings.t_sample_ms / smpl_timings.n_sample, 1e3 / smpl_timings.t_sample_ms * smpl_timings.n_sample).c_str());
-        NVIGI_LOG_INFO("timings:prompt %s", extra::format("{} ms / {} tokens ({} ms/token, {} tokens/second)", timings.t_p_eval_ms, timings.n_p_eval, timings.t_p_eval_ms / timings.n_p_eval, 1e3 / timings.t_p_eval_ms * timings.n_p_eval).c_str());
-        NVIGI_LOG_INFO("timings:eval   %s", extra::format("{} ms / {} runs ({} ms/token, {} tokens/second)", timings.t_eval_ms, timings.n_eval, timings.t_eval_ms / timings.n_eval, 1e3 / timings.t_eval_ms * timings.n_eval).c_str());
-        NVIGI_LOG_INFO("timings:total  %s", extra::format("{}ms", (t_end_ms - timings.t_start_ms)).c_str());
-#else
-        callback(sync->execCtx, 0, "", nvigi::kInferenceExecutionStateDone);
-#endif
         if (sync->tgLimiter)
         {
             auto currentTokensPerSecond = (int32_t)(1e3 / timings.t_eval_ms * timings.n_eval);
@@ -1255,11 +1403,9 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
         // End NVIDIA Modification
 
         // Begin NVIDIA Modification
-        // Sampler has to die here, as perf reporting requires it earlier.  We create/delete every generate as runtime parameters could theoretically 
-        // change the sampler parameters per evaluate call so we can't store sampler as an instance parameter.  
-        // See gpt.cpp ggmlEvaluate runtimeParameters
-        common_sampler_free(smpl);
-
+#ifndef NVIGI_PRODUCTION
+        reportStats(ctx, smpl);
+#endif
         // We free the context and model in ggmlDestroyInstance instead.
         // backend is freed in nvigiPluginDeregister
         // nvigi doesn't use ggml_threadpools

@@ -44,6 +44,7 @@ struct InferenceParameters
     int minSizeChunk = 100;  // Runtime parameter for minimum chunk size
     int maxSizeChunk = 200;  // Runtime parameter for maximum chunk size
     int seed = -725171668;   // Runtime parameter for random seed
+    std::atomic<bool>* cancelled = nullptr;  // Pointer to cancellation flag for early termination
 };
 
 struct CreationParameters

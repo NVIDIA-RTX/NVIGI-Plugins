@@ -27,7 +27,7 @@ The supported cloud models in this release include:
 | ------ | ---------- | ---- | ------ |
 | nvigi.plugin.tts.asqflow-trt | Riva Magpie-TTS-Flow | 81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F | Model in pack |
 | nvigi.plugin.tts.asqflow-ggml | Riva Magpie-TTS-Flow (Q4) | 3D52FDC0-5B6D-48E1-B108-84D308818602 | Model in pack |
-| | Riva Magpie-TTS-Flow (FP16) | 33E000D6-35A2-46D8-BCB5-E10F8CA137C0 | Model in pack |
+| | Riva Magpie-TTS-Flow (FP16) | 16EEB8EA-55A8-4F40-BECE-CE995AF44101 | Model in pack |
 
 ### Manually-Downloadable, Public Models
 
@@ -37,6 +37,9 @@ The supported cloud models in this release include:
 | nvigi.plugin.embed.ggml.* | E5 Large Unsupervised | 5D458A64-C62E-4A9C-9086-2ADBF6B241C7 | [Model Page](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/nvigisdk/models/e5-large-unsupervised) |
 | nvigi.plugin.gpt.ggml.* | Llama3.2 3b Instruct | 01F43B70-CE23-42CA-9606-74E80C5ED0B6 | [Model Page](https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF) |
 | | Nemotron Mini 4B | 8E31808B-C182-4016-9ED8-64804FF5B40D | [Model Page](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/ucs-ms/resources/nemotron-mini-4b-instruct) |
+| | Nemotron Nano 9B v2 | 83B2E4EA-ED1B-4A42-9184-A5550F0ECDD2 | [Model Page](https://catalog.ngc.nvidia.com/orgs/nim/teams/nvidia/containers/nvidia-nemotron-nano-9b-v2) |
+| | Qwen3 0.6B (Q4) | 545F7EC2-4C29-499B-8FC8-61720DF3C006 | [Model Page](https://huggingface.co/Qwen/Qwen3-0.6B-GGUF) |
+| | Qwen3 4B (Q4) | 545F7EC2-4C29-499B-8FC8-61720DF3C040 | [Model Page](https://huggingface.co/Qwen/Qwen3-4B-GGUF) |
 | | Qwen3 8B (Q4) | 545F7EC2-4C29-499B-8FC8-61720DF3C626 | [Model Page](https://huggingface.co/Qwen/Qwen3-8B-GGUF) |
 
 ### Manually-Downloadable, Licensed Models
@@ -60,6 +63,8 @@ The main documentation for using the pack includes:
 		- Discusses the high-level architecture of the entire SDK, the data flow, etc
     - [GPU Scheduling For AI Guide](nvigi_core/docs/GpuSchedulingForAI)
 		- A detailed document on how advanced applications can assist in causing GPU AI work to be best scheduled along with 3D work
+    - [Multi-GPU Guide](nvigi_core/docs/RunningOnMultipleGPUs)
+		- A detailed document on how advanced applications can select the GPUs to use for AI workloads, and how to run on multiple GPUs with supported plugins.
 - [Plugin SDK Guide](Plugins)
 	- The core documentation for getting started with the details of the AI plguins.  This describes how to run a set of much more minimal samples and how to run the samples in the debugger.
 	- Detailed documentation on the components of the SDK plugins, including:

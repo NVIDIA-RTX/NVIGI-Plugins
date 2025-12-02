@@ -65,6 +65,10 @@ Result _nvcfPost(const Parameters& params, types::string& response)
     response = data.dump(-1, ' ', false, json::error_handler_t::replace).c_str();
     return res;
 }
+Result _nvcfPostStreaming(const Parameters& params, StreamingDataCallback callback, void* userdata)
+{
+    return net::getInterface()->nvcfPostStreaming(params, callback, userdata);
+}
 Result _nvcfUploadAsset(const types::string& contentType, const types::string& description, const types::vector<uint8_t>& asset, types::string& assetId)
 {
     return net::getInterface()->nvcfUploadAsset(contentType, description, asset, assetId);
@@ -87,6 +91,10 @@ Result nvcfGet(const Parameters& params, types::string& response)
 Result nvcfPost(const Parameters& params, types::string& response)
 {
     NVIGI_CATCH_EXCEPTION(_nvcfPost(params, response));
+}
+Result nvcfPostStreaming(const Parameters& params, StreamingDataCallback callback, void* userdata)
+{
+    NVIGI_CATCH_EXCEPTION(_nvcfPostStreaming(params, callback, userdata));
 }
 Result nvcfUploadAsset(const types::string& contentType, const types::string& description, const types::vector<uint8_t>& asset, types::string& assetId)
 {
@@ -134,6 +142,7 @@ Result nvigiPluginRegister(framework::IFramework* framework)
         ctx.api.nvcfSetToken = net::nvcfSetToken;
         ctx.api.nvcfGet = net::nvcfGet;
         ctx.api.nvcfPost = net::nvcfPost;
+        ctx.api.nvcfPostStreaming = net::nvcfPostStreaming;
         ctx.api.nvcfUploadAsset = net::nvcfUploadAsset;
         framework->addInterface(plugin::net::kId, &ctx.api, 0);
     }

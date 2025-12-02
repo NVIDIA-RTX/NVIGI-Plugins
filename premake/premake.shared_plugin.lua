@@ -1,4 +1,8 @@
 function pluginBasicSetupInternal(name, sdk)
+	kind "SharedLib"
+	targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
+	objdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
+
 	files { 
 		coresdkdir .. "source/core/nvigi.api/**.h",
 		coresdkdir .. "source/core/nvigi.log/**.h",				
@@ -11,6 +15,7 @@ function pluginBasicSetupInternal(name, sdk)
 		coresdkdir .. "source/utils/**.h",		
 		ROOT .. "source/plugins/nvigi."..name.."/versions.h",
 		ROOT .. "source/plugins/nvigi."..name.."/resource.h",
+		ROOT .. "source/plugins/nvigi."..name.."/premake.lua",
 	}
 		
 	includedirs 
@@ -32,7 +37,8 @@ function pluginBasicSetupInternal(name, sdk)
 		vpaths { ["extra"] = {coresdkdir .. "source/core/nvigi.extra/**.h"}}		
 		vpaths { ["plugin"] = {coresdkdir .. "source/core/nvigi.plugin/**.h",coresdkdir .. "source/core/nvigi.plugin/**.cpp"}}	
 		vpaths { ["version"] = {coresdkdir .. "source/plugins/nvigi."..name.."/resource.h",ROOT .. "source/plugins/nvigi."..name.."/versions.h",ROOT .. "source/plugins/nvigi."..name.."/**.rc"}}
-		
+		vpaths {["premake"] = {ROOT .. "source/plugins/nvigi."..name.."/premake.lua"}
+	}
 		-- NOTE: moved the warning section after the files setup because filter was messing up inclusion of *.rc
 		
 		-- disable warnings coming from external source code

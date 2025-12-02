@@ -2,10 +2,6 @@ group "plugins/embed"
 
 local external_dir_llamacpp = externaldir .. "llama.cpp"
 project "nvigi.plugin.embed.ggml.cuda"
-	kind "SharedLib"
-	targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
-	objdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
-	
 	pluginBasicSetup("embed/ggml")
 	
 	defines {
@@ -46,29 +42,21 @@ project "nvigi.plugin.embed.ggml.cuda"
 
 	filter {"system:windows"}
 
-		libdirs {externaldir .."cuda//lib/x64"}
+		libdirs {
+			externaldir .."cuda//lib/x64",
+			external_dir_llamacpp .. "/cuda/lib/".."%{iif(cfg.buildcfg:startswith(\"Debug\"), \"Debug\", \"NotDebug\")}",
+		}
+
 		links {"cuda.lib", "cublas.lib"}
 
-
-		filter {"system:windows", "configurations:Debug"}
-			links {
-				(external_dir_llamacpp .. "/cuda/lib/Debug/common.lib"),
-				(external_dir_llamacpp .. "/cuda/lib/Debug/ggml.lib"), 
-				(external_dir_llamacpp .. "/cuda/lib/Debug/llama.lib"),
-				(external_dir_llamacpp .. "/cuda/lib/Debug/ggml-cpu.lib"),
-				(external_dir_llamacpp .. "/cuda/lib/Debug/ggml-cuda.lib"),
-				(external_dir_llamacpp .. "/cuda/lib/Debug/ggml-base.lib")
-			}
-
-		filter {"system:windows", "configurations:not Debug"}
-			links {
-				(external_dir_llamacpp .. "/cuda/lib/NotDebug/common.lib"),
-				(external_dir_llamacpp .. "/cuda/lib/NotDebug/ggml.lib"), 
-				(external_dir_llamacpp .. "/cuda/lib/NotDebug/llama.lib"),
-				(external_dir_llamacpp .. "/cuda/lib/NotDebug/ggml-cpu.lib"),
-				(external_dir_llamacpp .. "/cuda/lib/NotDebug/ggml-cuda.lib"),
-				(external_dir_llamacpp .. "/cuda/lib/NotDebug/ggml-base.lib")
-			}
+		links {
+			"common.lib",
+			"ggml.lib", 
+			"llama.lib",
+			"ggml-cpu.lib",
+			"ggml-cuda.lib",
+			"ggml-base.lib"
+		}
 
 
 	filter {"system:linux"}
@@ -85,10 +73,6 @@ project "nvigi.plugin.embed.ggml.cuda"
 	add_cuda_dependencies()
 
 project "nvigi.plugin.embed.ggml.cpu"
-	kind "SharedLib"
-	targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
-	objdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
-	
 	pluginBasicSetup("embed/ggml")
 	
 	defines {
@@ -119,22 +103,17 @@ project "nvigi.plugin.embed.ggml.cpu"
 
 	vpaths { ["impl"] = {"../*.h", "./*.h", "./*.cpp" }}
 
-	filter {"system:windows", "configurations:Debug"}
-		links {
-			(external_dir_llamacpp .. "/cpu/lib/Debug/common.lib"),
-			(external_dir_llamacpp .. "/cpu/lib/Debug/ggml.lib"), 
-			(external_dir_llamacpp .. "/cpu/lib/Debug/llama.lib"),
-			(external_dir_llamacpp .. "/cpu/lib/Debug/ggml-cpu.lib"),			
-			(external_dir_llamacpp .. "/cpu/lib/Debug/ggml-base.lib")
+	filter {"system:windows"}
+		libdirs {
+			external_dir_llamacpp .. "/cpu/lib/".."%{iif(cfg.buildcfg:startswith(\"Debug\"), \"Debug\", \"NotDebug\")}",
 		}
 
-	filter {"system:windows", "configurations:not Debug"}
 		links {
-			(external_dir_llamacpp .. "/cpu/lib/NotDebug/common.lib"),
-			(external_dir_llamacpp .. "/cpu/lib/NotDebug/ggml.lib"), 
-			(external_dir_llamacpp .. "/cpu/lib/NotDebug/llama.lib"),
-			(external_dir_llamacpp .. "/cpu/lib/NotDebug/ggml-cpu.lib"),
-			(external_dir_llamacpp .. "/cpu/lib/NotDebug/ggml-base.lib")
+			"common.lib",
+			"ggml.lib", 
+			"llama.lib",
+			"ggml-cpu.lib",
+			"ggml-base.lib"
 		}
 	
 	filter {"system:linux"}

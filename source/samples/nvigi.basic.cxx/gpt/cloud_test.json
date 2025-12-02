@@ -1,0 +1,17 @@
+{
+    "model" : "nvdev/meta/llama-3.2-3b-instruct",
+    "messages": [
+        {
+            "role":"system",
+            "content":"This is a transcript of a dialog between Kai (male) and ramen shop owner named Jin (male). They are old friends and know each other really well. You are Jin, user will be Kai. Answer with short sentences, everyone takes one turn."
+        },
+        {
+            "role":"user",
+            "content":"Hey Jin, what's up?"
+        }
+    ],
+    "stream": true,
+    "temperature": 0.5,
+    "top_p" : 1,
+    "max_tokens": 1024
+}

@@ -214,12 +214,20 @@ inline std::string getExecutablePath()
 #endif
 }
 
-void loggingCallback(nvigi::LogType type, const char* msg)
+void loggingPrint(nvigi::LogType type, const char* msg, bool enableStdout = false)
 {
 #ifdef NVIGI_WINDOWS
     OutputDebugStringA(msg);
 #endif
-    std::cout << msg;
+#ifndef NVIGI_DEBUG
+    if (enableStdout)
+#endif
+        std::cout << msg;
+}
+
+void loggingCallback(nvigi::LogType type, const char* msg)
+{
+    loggingPrint(type, msg);
 }
 
 void LogVRAM(const char* prefix = nullptr)
@@ -228,7 +236,7 @@ void LogVRAM(const char* prefix = nullptr)
     nvigi::D3D12ContextInfo::GetActiveInstance()->adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info);
     char msg[1024];
     snprintf(msg, 1024, "\n%s: %0.2fMB\n", prefix ? prefix : "**** Current VRAM", info.CurrentUsage / 1000000.0f);
-    loggingCallback(nvigi::LogType::eInfo, msg);
+    loggingPrint(nvigi::LogType::eInfo, msg, true);
 }
 
 ID3D12Resource* createCommittedResource(
@@ -244,7 +252,7 @@ ID3D12Resource* createCommittedResource(
     if (FAILED(hr))
     {
         // Handle error
-        loggingCallback(nvigi::LogType::eError, "Resource could not be allocated!");
+        loggingPrint(nvigi::LogType::eError, "Resource could not be allocated!");
         return nullptr;
     }
     if (model)
@@ -255,7 +263,7 @@ ID3D12Resource* createCommittedResource(
         }
         else
         {
-            loggingCallback(nvigi::LogType::eError, "Resource already exists in the map, this should not happen!");
+            loggingPrint(nvigi::LogType::eError, "Resource already exists in the map, this should not happen!");
         }
     }
     return resource;
@@ -268,7 +276,7 @@ void destroyResource(ID3D12Resource* pResource, void* userContext)
     {
         if (model->resourceMap.find(pResource) == model->resourceMap.end())
         {
-            loggingCallback(nvigi::LogType::eError, "Resource not found in the map, trying all maps!");
+            loggingPrint(nvigi::LogType::eError, "Resource not found in the map, trying all maps!");
 
             model = nullptr;
             for (auto it : nvigiCtx.gptModels)
@@ -283,7 +291,7 @@ void destroyResource(ID3D12Resource* pResource, void* userContext)
 
             if (!model)
             {
-                loggingCallback(nvigi::LogType::eError, "Resource not found in any model map, this should not happen!");
+                loggingPrint(nvigi::LogType::eError, "Resource not found in any model map, this should not happen!");
                 pResource->Release();
                 return; // Resource not found in any model's map
             }
@@ -313,7 +321,7 @@ void SetResourceMapResidency(NVIGIAppCtx::GPTModel* model, bool resident)
         // Make resources resident
         if (nvigi::D3D12ContextInfo::GetActiveInstance()->device->MakeResident(resourcesToUpdate.size(), resourcesToUpdate.data()) != S_OK)
         {
-            loggingCallback(nvigi::LogType::eError, "Failed to make resources resident");
+            loggingPrint(nvigi::LogType::eError, "Failed to make resources resident");
         }
     }
     else
@@ -321,7 +329,7 @@ void SetResourceMapResidency(NVIGIAppCtx::GPTModel* model, bool resident)
         // Evict resources
         if (nvigi::D3D12ContextInfo::GetActiveInstance()->device->Evict(resourcesToUpdate.size(), resourcesToUpdate.data()) != S_OK)
         {
-            loggingCallback(nvigi::LogType::eError, "Failed to evict resources");
+            loggingPrint(nvigi::LogType::eError, "Failed to evict resources");
         }
     }
 }
@@ -335,7 +343,7 @@ void SetResourceMapResidency(const std::string& name, bool resident)
     }
     else
     {
-        loggingCallback(nvigi::LogType::eError, "Model not found in the map");
+        loggingPrint(nvigi::LogType::eError, "Model not found in the map", true);
         return;
     }
     SetResourceMapResidency(model, resident);
@@ -355,7 +363,7 @@ int InitNVIGI(const std::string& pathToSDKUtf8)
     nvigiCtx.coreLib = LoadLibraryA(libPath.c_str());
     if (nvigiCtx.coreLib == nullptr)
     {
-        loggingCallback(nvigi::LogType::eError, "Could not load NVIGI core library");
+        loggingPrint(nvigi::LogType::eError, "Could not load NVIGI core library");
         return -1;
     }
 
@@ -367,7 +375,7 @@ int InitNVIGI(const std::string& pathToSDKUtf8)
     if (ptr_nvigiInit == nullptr || ptr_nvigiShutdown == nullptr ||
         ptr_nvigiLoadInterface == nullptr || ptr_nvigiUnloadInterface == nullptr)
     {
-        loggingCallback(nvigi::LogType::eError, "Could not load NVIGI core library");
+        loggingPrint(nvigi::LogType::eError, "Could not load NVIGI core library");
         return -1;
     }
 
@@ -378,15 +386,15 @@ int InitNVIGI(const std::string& pathToSDKUtf8)
 
     nvigi::Preferences pref{};
     pref.logLevel = nvigi::LogLevel::eVerbose;
-    pref.showConsole = true;
+    pref.showConsole = false;
     pref.numPathsToPlugins = 1;
     pref.utf8PathsToPlugins = paths;
-    pref.logMessageCallback = pref.showConsole ? (nvigi::PFun_LogMessageCallback*)nullptr : loggingCallback; // avoid duplicating logs in the console
+    pref.logMessageCallback = loggingCallback; // avoid duplicating logs in the console
     pref.utf8PathToLogsAndData = pathToSDKUtf8.c_str();
 
     if (NVIGI_FAILED(result, ptr_nvigiInit(pref, nullptr, nvigi::kSDKVersion)))
     {
-        loggingCallback(nvigi::LogType::eError, "NVIGI init failed");
+        loggingPrint(nvigi::LogType::eError, "NVIGI init failed");
         return -1;
     }
 
@@ -396,7 +404,7 @@ int InitNVIGI(const std::string& pathToSDKUtf8)
         nvigiCtx.gptId = nvigi::plugin::gpt::ggml::d3d12::kId;
         if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigiCtx.gptId, &nvigiCtx.igpt, ptr_nvigiLoadInterface)))
         {
-            loggingCallback(nvigi::LogType::eError, "Could not query GPT interface");
+            loggingPrint(nvigi::LogType::eError, "Could not query GPT interface");
             return -1;
         }
     }
@@ -409,13 +417,13 @@ int ShutdownNVIGI()
     // Hard-coded to local
     if (NVIGI_FAILED(result, ptr_nvigiUnloadInterface(nvigiCtx.gptId, nvigiCtx.igpt)))
     {
-        loggingCallback(nvigi::LogType::eError, "Error in 'nvigiUnloadInterface'");
+        loggingPrint(nvigi::LogType::eError, "Error in 'nvigiUnloadInterface'");
         return -1;
     }
 
     if (NVIGI_FAILED(result, ptr_nvigiShutdown()))
     {
-        loggingCallback(nvigi::LogType::eError, "Error in 'nvigiShutdown'");
+        loggingPrint(nvigi::LogType::eError, "Error in 'nvigiShutdown'");
         return -1;
     }
 
@@ -440,7 +448,7 @@ int InitGPT(const std::string& modelDir, const std::string& modelName, const std
     // Chain together specific and common
     if (NVIGI_FAILED(result, gptCommon.chain(gptParams)))
     {
-        loggingCallback(nvigi::LogType::eError, "GPT param chaining failed");
+        loggingPrint(nvigi::LogType::eError, "GPT param chaining failed");
         return -1;
     }
 
@@ -453,7 +461,7 @@ int InitGPT(const std::string& modelDir, const std::string& modelName, const std
     d3d12Params.destroyResourceCallback = destroyResource;
     if (NVIGI_FAILED(result, gptCommon.chain(d3d12Params)))
     {
-        loggingCallback(nvigi::LogType::eError, "D3D12 param chaining failed");
+        loggingPrint(nvigi::LogType::eError, "D3D12 param chaining failed");
         return -1;
     }
 
@@ -481,7 +489,7 @@ int InitGPT(const std::string& modelDir, const std::string& modelName, const std
     nvigi::CommonCapabilitiesAndRequirements* caps{};
     if (NVIGI_FAILED(result, getCapsAndRequirements(nvigiCtx.igpt, gptCommon, &caps)))
     {
-        loggingCallback(nvigi::LogType::eError, "'getCapsAndRequirements' failed");
+        loggingPrint(nvigi::LogType::eError, "'getCapsAndRequirements' failed");
         return -1;
     }
 
@@ -490,7 +498,7 @@ int InitGPT(const std::string& modelDir, const std::string& modelName, const std
     //! NOTE: This will be >=1 if we provide null as modelGUID in common creation parameters
     if (caps->numSupportedModels != 1)
     {
-        loggingCallback(nvigi::LogType::eError, "'getCapsAndRequirements' failed to find our model or model cannot run on system given the VRAM restrictions");
+        loggingPrint(nvigi::LogType::eError, "'getCapsAndRequirements' failed to find our model or model cannot run on system given the VRAM restrictions");
         return -1;
     }
 
@@ -499,7 +507,7 @@ int InitGPT(const std::string& modelDir, const std::string& modelName, const std
 
     if (NVIGI_FAILED(result, nvigiCtx.igpt->createInstance(gptCommon, &(model->inst))))
     {
-        loggingCallback(nvigi::LogType::eError, "Could not create GPT instance");
+        loggingPrint(nvigi::LogType::eError, "Could not create GPT instance");
         return -1;
     }
 
@@ -529,7 +537,7 @@ int DeleteModel(const std::string& modelName)
     }
     else
     {
-        loggingCallback(nvigi::LogType::eError, "GPT model not found in the context");
+        loggingPrint(nvigi::LogType::eError, "GPT model not found in the context");
         return -1;
     }
 }
@@ -547,7 +555,7 @@ int ReleaseGPT(const std::string& modelName = "")
         {
             if (DeleteModel(nvigiCtx.gptModels.begin()->first))
             {
-                loggingCallback(nvigi::LogType::eError, "Failed to delete model");
+                loggingPrint(nvigi::LogType::eError, "Failed to delete model");
                 return -1;
             }
         }
@@ -572,7 +580,7 @@ nvigi::InferenceExecutionState GPTInferenceDataCallback(const nvigi::InferenceEx
     if (cbkCtx->conversationInitialized)
     {
         cbkCtx->gptOutput += response;
-        loggingCallback(nvigi::LogType::eInfo, response.c_str());
+        loggingPrint(nvigi::LogType::eInfo, response.c_str(), true);
     }
 
     cbkCtx->gptCallbackState.store(state);
@@ -590,7 +598,7 @@ int GPTInference(const std::string& modelName, std::string& gptInputText, bool c
 	}
 	else
 	{
-		loggingCallback(nvigi::LogType::eError, "GPT model not found in the context");
+		loggingPrint(nvigi::LogType::eError, "GPT model not found in the context");
 		return -1;
 	}
 
@@ -623,7 +631,7 @@ int GPTInference(const std::string& modelName, std::string& gptInputText, bool c
     nvigi::InferenceDataSlotArray inputs = { slots.size(), slots.data() };
     gptExecCtx.inputs = &inputs;
 
-    loggingCallback(nvigi::LogType::eInfo, "** Assistant:\n");
+    loggingPrint(nvigi::LogType::eInfo, "** Assistant:\n", true);
     cbkCtx.gptCallbackState.store(nvigi::kInferenceExecutionStateDataPending);
     std::thread infer([&gptExecCtx, &model]()
         {
@@ -636,7 +644,7 @@ int GPTInference(const std::string& modelName, std::string& gptInputText, bool c
         cbkCtx.gptCallbackCV.wait(lck, [&cbkCtx]() { return cbkCtx.gptCallbackState != nvigi::kInferenceExecutionStateDataPending; });
         if (cbkCtx.gptCallbackState != nvigi::kInferenceExecutionStateDone)
         {
-            loggingCallback(nvigi::LogType::eError, "GPT Inference error!\n");
+            loggingPrint(nvigi::LogType::eError, "GPT Inference error!\n");
             return -1;
         }
     }
@@ -720,7 +728,7 @@ int main(int argc, char** argv)
             }
             else
             { 
-                loggingCallback(nvigi::LogType::eInfo, "\nInference Skipped\n");
+                loggingPrint(nvigi::LogType::eInfo, "\nInference Skipped\n", true);
             }
 
             LogVRAM();
@@ -729,21 +737,21 @@ int main(int argc, char** argv)
 
             if (!conversationInitialized)
             {
-                loggingCallback(nvigi::LogType::eInfo, "\n** Please continue the converation ('q' or 'quit' to exit, any other text to type your query\n");
+                loggingPrint(nvigi::LogType::eInfo, "\n** Please continue the converation ('q' or 'quit' to exit, any other text to type your query\n", true);
             }
-            loggingCallback(nvigi::LogType::eInfo, "\n>:");
+            loggingPrint(nvigi::LogType::eInfo, "\n>:", true);
 
             conversationInitialized = true;
 
             std::getline(std::cin, gptInputText);
             if (gptInputText == "q" || gptInputText == "Q" || gptInputText == "quit")
             {
-                loggingCallback(nvigi::LogType::eInfo, "Exiting - user request\n");
+                loggingPrint(nvigi::LogType::eInfo, "Exiting - user request\n", true);
                 running = false;
             }
             else if (gptInputText == "<unload>")
             {
-                loggingCallback(nvigi::LogType::eInfo, "\n** Unloading all models\n");
+                loggingPrint(nvigi::LogType::eInfo, "\n** Unloading all models\n", true);
                 for (auto& it : nvigiCtx.gptModels)
                 {
                     SetResourceMapResidency(it.second, false);
@@ -753,33 +761,33 @@ int main(int argc, char** argv)
             {
                 if (gptModelName != "llama3")
                 {
-                    loggingCallback(nvigi::LogType::eInfo, "\n** Loading llama3 model\n");
+                    loggingPrint(nvigi::LogType::eInfo, "\n** Loading llama3 model\n", true);
                     SetResourceMapResidency(gptModelName, false);
                     gptModelName = "llama3";
                     conversationInitialized = false;
                 }
                 else
                 {
-                    loggingCallback(nvigi::LogType::eInfo, "\n** Already using llama3 model\n");
+                    loggingPrint(nvigi::LogType::eInfo, "\n** Already using llama3 model\n", true);
 				}
             }
             else if (gptInputText == "<nemotron>")
             {
                 if (gptModelName != "nemotron")
                 {
-                    loggingCallback(nvigi::LogType::eInfo, "\n** Loading nemotron model\n");
+                    loggingPrint(nvigi::LogType::eInfo, "\n** Loading nemotron model\n", true);
                     SetResourceMapResidency(gptModelName, false);
                     gptModelName = "nemotron";
                     conversationInitialized = false;
                 }
                 else
                 {
-                    loggingCallback(nvigi::LogType::eInfo, "\n** Already using nemotron model\n");
+                    loggingPrint(nvigi::LogType::eInfo, "\n** Already using nemotron model\n", true);
 				}
             }
             else if (gptInputText[0] == '<')
             {
-                loggingCallback(nvigi::LogType::eInfo, "\n** Unknown \"<\" keyword.  This app supports <unload>, <llama3> and <nemotron>\n");
+                loggingPrint(nvigi::LogType::eInfo, "\n** Unknown \"<\" keyword.  This app supports <unload>, <llama3> and <nemotron>\n", true);
             }
             else
             {

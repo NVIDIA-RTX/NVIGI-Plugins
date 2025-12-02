@@ -1,9 +1,10 @@
-
 # Automatic Speech Recognition (ASR) - Whisper Programming Guide
 
 The focus of this guide is on using In-Game Inferencing to integrate an ASR Whisper model into an application. More details can be found here [OpenAI Whisper](https://openai.com/research/whisper)
 
 Please read the [Programming Guide for AI](nvigi_core/docs/ProgrammingGuideAI.md) located in the NVIGI Core package to learn more about overall AI inference API in NVIGI SDK.
+
+> **MIN RUNTIME SPEC:** Note that all Whisper ASR backends require a CPU supporting AVX2 instructions.  Support for this instruction extension is ubiquitous in modern gaming CPUs, but older hardware may not support it.
 
 > **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the SDK's Basic command line sample [Source Code](../source/samples/nvigi.basic/basic.cpp) and [Docs](Samples.md).  The Basic command-line sample includes the option to record audio and converting it to a text query for an LLM via the ASR plugins.
 
@@ -16,6 +17,31 @@ Please read the [Programming Guide for AI](nvigi_core/docs/ProgrammingGuideAI.md
 ## 1.0 INITIALIZE AND SHUTDOWN
 
 Please read the [Programming Guide](nvigi_core/docs/ProgrammingGuide.md) located in the NVIGI Core package to learn more about initializing and shutting down NVIGI SDK. 
+
+### 1.1 MODERN C++ WRAPPER (RECOMMENDED)
+
+The NVIGI SDK provides modern C++ wrappers that simplify initialization and provide a cleaner API with RAII, `std::expected`, and builder patterns. The wrappers are located in `source/samples/nvigi.basic.cxx/` and can be used in your projects.
+
+```cpp
+#include "core.hpp"
+#include "asr.hpp"
+
+using namespace nvigi::asr;
+
+// Initialize NVIGI core with builder pattern
+nvigi::Core core({ 
+    .sdkPath = "path/to/sdk",
+    .logLevel = nvigi::LogLevel::eDefault,
+    .showConsole = true 
+});
+
+// Access system information
+const auto& sysInfo = core.getSystemInfo();
+std::cout << "Detected " << sysInfo.getNumPlugins() << " plugins\n";
+std::cout << "Detected " << sysInfo.getNumAdapters() << " adapters\n";
+```
+
+> **NOTE:** The C++ wrappers provide the same functionality as the low-level API but with modern C++ idioms. Both approaches are valid and can be mixed if needed.
 
 ## 2.0 OBTAIN ASR INTERFACE
 
@@ -35,6 +61,17 @@ if(NVIGI_FAILED(result, nvigiGetInterface(nvigi::plugin::asr::ggml::cuda::kId &i
 
 > **NOTE:**
 One can only obtain interface for a feature which is available on user system. Interfaces are valid as long as the NVIGI ASR feature (plugin) is loaded and active.
+
+### 2.1 MODERN C++ WRAPPER APPROACH
+
+The C++ wrapper handles interface loading automatically during instance creation. You don't need to manually obtain interfaces:
+
+```cpp
+// No manual interface loading needed!
+// Just create the instance with your desired backend
+```
+
+See section 3.2 for complete instance creation examples using the wrapper.
 
 ## 3.0 CREATE ASR INSTANCE(S)
 
@@ -135,6 +172,66 @@ Next we need to provide information about D3D12 properties if our application is
 
 > **IMPORTANT**: Providing D3D or Vulkan device and queue is highly recommended to ensure optimal performance
 
+### 3.3 MODERN C++ WRAPPER APPROACH
+
+The C++ wrapper simplifies instance creation with builder patterns and automatic resource management:
+
+```cpp
+#include "d3d12.hpp"  // or "vulkan.hpp"
+
+using namespace nvigi::asr;
+
+// Setup D3D12 (if using D3D12 or CUDA backend)
+auto deviceAndQueue = nvigi::d3d12::D3D12Helper::create_best_compute_device();
+nvigi::d3d12::D3D12Config d3d12_config = {
+    .device = deviceAndQueue.device.Get(),
+    .command_queue = deviceAndQueue.compute_queue.Get(),
+    .create_committed_resource_callback = nvigi::d3d12::default_create_committed_resource,
+    .destroy_resource_callback = nvigi::d3d12::default_destroy_resource
+};
+
+// Or setup Vulkan (if using Vulkan backend)
+auto vk_objects = nvigi::vulkan::VulkanHelper::create_best_compute_device();
+nvigi::vulkan::VulkanConfig vk_config = {
+    .instance = vk_objects.instance,
+    .physical_device = vk_objects.physical_device,
+    .device = vk_objects.device,
+    .compute_queue = vk_objects.compute_queue,
+    .transfer_queue = vk_objects.transfer_queue,
+    .allocate_memory_callback = nvigi::vulkan::default_allocate_memory,
+    .free_memory_callback = nvigi::vulkan::default_free_memory
+};
+
+// Create ASR instance with builder pattern
+auto instance = Instance::create(
+    ModelConfig{
+        .backend = "d3d12",  // or "cuda", "vulkan"
+        .guid = "{5CAD3A03-1272-4D43-9F3D-655417526170}",  // Whisper Small
+        .model_path = "path/to/nvigi.models",
+        .num_threads = 8,
+        .vram_budget_mb = 2048,
+        .flash_attention = true,
+        .language = "en",       // or "auto" for detection
+        .translate = false,     // translate to English
+        .detect_language = false
+    },
+    d3d12_config,      // Pass your config based on backend
+    vk_config,         // Can pass both, unused ones are ignored
+    core.loadInterface(),
+    core.unloadInterface()
+).value();  // Will throw if creation fails
+
+// Instance is ready to use!
+// RAII ensures proper cleanup when instance goes out of scope
+```
+
+The wrapper automatically:
+- Loads the correct plugin based on backend
+- Chains all creation parameters correctly
+- Manages interface lifetimes
+- Provides clear error messages via `std::expected`
+- Cleans up resources when destroyed
+
 ## 4.0 AUDIO INPUT
 
 ### 4.1 PROCESS COMPLETE AUDIO CLIP
@@ -194,9 +291,11 @@ std::vector<int16> pcm16 = getMyMonoAudio();
 nvigi::InferenceDataAudioSTLHelper audio{pmc16, 1}; // assuming single channel mono audio
 ```
 
-## 5.0 SETUP CALLBACK TO RECEIVE INFERRED DATA
+## 5.0 RECEIVE INFERRED DATA
+There are two ways to receive data from ASR inference when using evaluateAsync: using a callback or polling for results.
 
-In order to receive transcribed text from the ASR model inference a special callback needs to be setup like this:
+### 5.1 CALLBACK APPROACH
+To receive transcribed text via callback, set up the callback handler like this:
 
 ```cpp
 auto asrCallback = [](const nvigi::InferenceExecutionContext* execCtx, nvigi::InferenceExecutionState state, void* userData)->nvigi::InferenceExecutionState 
@@ -241,7 +340,134 @@ auto asrCallback = [](const nvigi::InferenceExecutionContext* execCtx, nvigi::In
 > **NOTE:**
 > To cancel ASR inference make sure to return `nvigi::InferenceExecutionStateCancel` state in the callback.
 
+### 5.1.1 MODERN C++ WRAPPER APPROACH
+
+The C++ wrapper simplifies callbacks with modern C++ lambdas and cleaner state management:
+
+```cpp
+using namespace nvigi::asr;
+
+// Record audio (using helper from wrapper)
+auto* recording = AudioRecorder::StartRecording();
+std::this_thread::sleep_for(std::chrono::seconds(5));
+auto audioData = AudioRecorder::StopRecording(recording);
+
+// Simple callback - just process the text
+auto result = instance->transcribe(
+    audioData.data(),
+    audioData.size(),
+    RuntimeConfig{}
+        .set_sampling(SamplingStrategy::Greedy)
+        .set_temperature(0.0f),
+    [](std::string_view text, ExecutionState state) -> ExecutionState {
+        // Callback receives text and state
+        std::cout << text;  // Print transcribed text
+        
+        // Cancel if needed
+        if (should_cancel) {
+            return ExecutionState::Cancel;
+        }
+        
+        return state;  // Continue with current state
+    }
+);
+
+if (!result) {
+    std::cerr << "Error: " << result.error().what() << "\n";
+}
+```
+
+The wrapper provides:
+- Cleaner lambda syntax with `std::string_view`
+- Enum-based state management (`ExecutionState::Done`, `ExecutionState::Cancel`)
+- `std::expected` for error handling
+- No manual memory management needed
+
+### 5.2 POLLING APPROACH
+
+Alternatively, when using evaluateAsync, you can poll for results instead of using a callback. This is useful when you want more control over when to process results or need to integrate with a polling-based architecture:
+
+```cpp
+// Start async evaluation without a callback
+asrContext.callback = nullptr;
+if (NVIGI_FAILED(res, asrContext.instance->evaluateAsync(&asrContext))) {
+    LOG("NVIGI async evaluation failed, code %d", res);
+    return;
+}
+
+// Poll for results
+while (true) {
+    nvigi::InferenceExecutionState state;
+    
+    // Get current results - pass true to wait for new data, false to check immediately
+    if (NVIGI_FAILED(res, asrContext.instance->getResults(&asrContext, true, &state))) {
+        LOG("Failed to get results, code %d", res);
+        break;
+    }
+    
+    // Process the current results if available
+    if (asrContext.outputs) {
+        const nvigi::InferenceDataText* text{};
+        asrContext.outputs->findAndValidateSlot(nvigi::kASRDataSlotTranscribedText, &text);
+        if (text) {
+            std::string transcribedText = text->getUtf8Text();
+            // Process the transcribed text
+        }
+    }
+    
+    // Release the current results to free resources
+    if (NVIGI_FAILED(res, asrContext.instance->releaseResults(&asrContext, state))) {
+        LOG("Failed to release results, code %d", res);
+        break;
+    }
+    
+    // Check if inference is complete
+    if (state == nvigi::kInferenceExecutionStateDone) {
+        break;
+    }
+}
+```
+
 ## 6.0 PREPARE THE EXECUTION CONTEXT
+
+### 6.1 RUNTIME PARAMETERS
+
+The `ASRWhisperRuntimeParameters` structure provides several options to control the behavior of the ASR inference:
+
+```cpp
+struct ASRWhisperRuntimeParameters {
+    ASRWhisperSamplingStrategy sampling = ASRWhisperSamplingStrategy::eGreedy; // Sampling strategy
+    int32_t bestOf = 1;            // For greedy sampling, number of candidates to consider (1 = disabled)
+    int32_t beamSize = -1;         // For beam search, number of beams (-1 = disabled)
+    
+    // v2 parameters
+    const char* prompt{};          // Optional prompt to guide the transcription
+    bool noContext = true;         // If true, do not use previous context
+    bool suppressBlank = true;     // If true, suppresses blank tokens in output
+    bool suppressNonSpeechTokens = false;  // If true, suppresses non-speech tokens
+    float temperature = 0.0f;      // Sampling temperature (0.0 = greedy, higher = more random)
+    float entropyThold = 2.4f;     // Entropy-based suppression threshold (0.0 = disabled)
+    float logprobThold = -1.0f;    // Log-probability suppression threshold (0.0 = disabled)
+    float noSpeechThold = 0.6f;    // No-speech detection threshold (0.0 = disabled)
+};
+```
+
+**Sampling Parameters:**
+- `sampling`: Choose between greedy decoding or beam search
+- `bestOf`: For greedy sampling, consider multiple candidates (useful with temperature > 0)
+- `beamSize`: For beam search, specify number of beams to use
+
+**Control Parameters (v2):**
+- `prompt`: Provide context to guide transcription
+- `noContext`: Enable/disable using previous context
+- `suppressBlank`: Control blank token suppression
+- `suppressNonSpeechTokens`: Filter out non-speech tokens
+- `temperature`: Control randomness in sampling
+- `entropyThold`: Threshold for entropy-based token filtering
+- `logprobThold`: Threshold for probability-based filtering
+- `noSpeechThold`: Sensitivity for no-speech detection
+
+### 6.2 EXECUTION CONTEXT
 
 Before ASR can be evaluated the `nvigi::InferenceExecutionContext` needs to be defined:
 
@@ -313,6 +539,243 @@ if(useASR)
 > **IMPORTANT:**
 > When using `instance->evaluateAsync` the host app must ensure that the execution context and all inputs are valid until all streaming data is processed fully and callback receives `nvigi::kInferenceExecutionStateDone` state.
 
+### 7.1 MODERN C++ WRAPPER APPROACH
+
+The C++ wrapper provides a high-level `Stream` API for audio streaming:
+
+**Complete Audio Processing (Blocking):**
+
+```cpp
+using namespace nvigi::asr;
+
+// Record audio
+auto* recording = AudioRecorder::StartRecording();
+std::this_thread::sleep_for(std::chrono::seconds(5));
+auto audioData = AudioRecorder::StopRecording(recording);
+
+// Transcribe (blocking with callback)
+std::string transcription;
+auto result = instance->transcribe(
+    audioData.data(),
+    audioData.size(),
+    RuntimeConfig{}
+        .set_sampling(SamplingStrategy::Greedy)
+        .set_temperature(0.0f)
+        .set_best_of(2),
+    [&transcription](std::string_view text, ExecutionState state) -> ExecutionState {
+        transcription += text;
+        std::cout << text << std::flush;
+        return state;
+    }
+);
+
+if (result) {
+    std::cout << "\nFinal: " << transcription << "\n";
+}
+```
+
+**Real-Time Streaming Mode:**
+
+```cpp
+// Create a stream
+auto stream = instance->create_stream(
+    RuntimeConfig{}
+        .set_sampling(SamplingStrategy::Greedy)
+        .set_temperature(0.0f)
+);
+
+// Start recording
+auto* recording = AudioRecorder::StartRecording();
+
+// Stream audio chunks
+size_t chunk_size = 6400;  // 200ms at 16kHz
+size_t bytes_processed = 0;
+bool is_first = true;
+
+while (true) {
+    // Get chunk (thread-safe)
+    std::vector<uint8_t> chunk_data;
+    {
+        std::lock_guard<std::mutex> lock(recording->mutex);
+        size_t available = recording->bytesWritten - bytes_processed;
+        
+        if (available >= chunk_size) {
+            chunk_data.resize(chunk_size);
+            memcpy(chunk_data.data(), 
+                   recording->audioBuffer.data() + bytes_processed,
+                   chunk_size);
+            bytes_processed += chunk_size;
+        }
+    }
+    
+    if (!chunk_data.empty()) {
+        // Send chunk async (non-blocking!)
+        auto op = stream.send_audio_async(
+            chunk_data.data(),
+            chunk_data.size(),
+            is_first,
+            false  // Not last chunk
+        ).value();
+        
+        is_first = false;
+        
+        // Poll for results in game loop
+        if (auto result = op.try_get_results()) {
+            if (!result->text.empty() && result->text != "[BLANK_AUDIO]") {
+                std::cout << result->text << std::flush;
+            }
+        }
+    }
+    
+    // Check for stop condition...
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+}
+
+auto audioData = AudioRecorder::StopRecording(recording);
+```
+
+**Key Features:**
+- `transcribe()` - Blocking transcription with callbacks
+- `create_stream()` - Real-time streaming with automatic chunk management
+- `send_audio_async()` - Non-blocking audio processing
+- Builder pattern for runtime configuration
+- RAII resource management
+
+### 7.2 CANCELLING ASYNC EVALUATION
+
+When using `evaluateAsync`, you can cancel an ongoing inference operation early using the `cancelAsyncEvaluation` API. This is useful when you need to interrupt audio processing due to user actions (e.g., pressing ESC), timeouts, or changing contexts.
+
+The cancellation mechanism is designed to interrupt the evaluation loop as early as possible, including during audio segment processing.
+
+Here's how to cancel an async evaluation:
+
+```cpp
+// Start async evaluation for audio streaming
+asrContext.callback = nullptr;
+nvigi::StreamingParameters audioChunkInfo{};
+audioChunkInfo.signal = nvigi::StreamSignal::eStreamSignalStart;
+asrRuntime.chain(audioChunkInfo);
+
+if (NVIGI_FAILED(res, asrContext.instance->evaluateAsync(&asrContext))) {
+    LOG("NVIGI async evaluation failed, code %d", res);
+    return;
+}
+
+// ... continue sending audio chunks ...
+
+// User decides to cancel
+if (NVIGI_FAILED(res, asrInstance->cancelAsyncEvaluation(&asrContext))) {
+    if (res == kResultNoImplementation) {
+        LOG("No async evaluation is currently running");
+    } else {
+        LOG("Failed to cancel evaluation, code %d", res);
+    }
+}
+
+// The processing will stop as soon as possible
+// Continue polling to clean up
+nvigi::InferenceExecutionState state;
+while (true) {
+    if (NVIGI_FAILED(res, asrInstance->getResults(&asrContext, false, &state))) {
+        break;
+    }
+    
+    // Release any remaining results
+    asrInstance->releaseResults(&asrContext, state);
+    
+    if (state == nvigi::kInferenceExecutionStateDone || 
+        state == nvigi::kInferenceExecutionStateInvalid) {
+        break;
+    }
+}
+```
+
+#### Important Notes:
+
+- **`cancelAsyncEvaluation` returns `kResultNoImplementation`** if no async job is running (i.e., `evaluateAsync` was not called or the job has already completed)
+- The cancellation is **thread-safe** and can be called from any thread
+- After calling `cancelAsyncEvaluation`, continue polling with `getResults` to properly clean up any remaining resources
+- The evaluation loop checks for cancellation at **strategic points**:
+  - During the main async processing loop
+  - Inside audio segment processing
+- Cancellation is designed to be **as fast as possible**, typically interrupting within a few milliseconds
+
+#### Example: User-Initiated Cancellation During Streaming
+
+```cpp
+// Track async state
+std::atomic<bool> userRequestedCancel = false;
+std::thread monitorThread;
+
+// Start monitoring for user input
+monitorThread = std::thread([&]() {
+    while (!userRequestedCancel) {
+        if (checkUserPressedEscape()) {
+            userRequestedCancel = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+});
+
+// Stream audio chunks
+asrContext.callback = nullptr;
+nvigi::StreamingParameters streamParams{};
+asrRuntime.chain(streamParams);
+
+std::vector<AudioChunk> chunks = getAudioChunks();
+for (size_t i = 0; i < chunks.size(); i++) {
+    // Check if user wants to cancel
+    if (userRequestedCancel) {
+        asrInstance->cancelAsyncEvaluation(&asrContext);
+        LOG("User cancelled audio processing");
+        break;
+    }
+    
+    // Set stream signal
+    streamParams.signal = (i == 0) ? nvigi::StreamSignal::eStreamSignalStart :
+                          (i == chunks.size() - 1) ? nvigi::StreamSignal::eStreamSignalStop :
+                          nvigi::StreamSignal::eStreamSignalData;
+    
+    // Send audio chunk
+    audioData.buffer = chunks[i].data();
+    audioData.sizeInBytes = chunks[i].size();
+    
+    if (NVIGI_FAILED(res, asrContext.instance->evaluateAsync(&asrContext))) {
+        LOG("Failed to send audio chunk");
+        break;
+    }
+}
+
+// Poll for any remaining results
+nvigi::InferenceExecutionState state;
+while (true) {
+    if (NVIGI_FAILED(res, asrInstance->getResults(&asrContext, true, &state))) {
+        break;
+    }
+    
+    // Process partial results if available
+    if (asrContext.outputs && !userRequestedCancel) {
+        const nvigi::InferenceDataText* text{};
+        if (asrContext.outputs->findAndValidateSlot(kASRWhisperDataSlotTranscribedText, &text)) {
+            std::string transcribed = text->getUTF8Text();
+            displayPartialTranscription(transcribed);
+        }
+    }
+    
+    asrInstance->releaseResults(&asrContext, state);
+    
+    if (state == nvigi::kInferenceExecutionStateDone || 
+        state == nvigi::kInferenceExecutionStateInvalid) {
+        break;
+    }
+}
+
+monitorThread.join();
+```
+
+> **NOTE**: Cancellation via `cancelAsyncEvaluation` is only available for async evaluation started with `evaluateAsync`. For synchronous evaluation, use the callback return value mechanism (return `kInferenceExecutionStateCancel` from the callback) as described in section 5.1.
+
 ## 8.0 DESTROY INSTANCE(S)
 
 Once ASR is no longer needed each instance should be destroyed like this:
@@ -324,6 +787,41 @@ if(NVIGI_FAILED(result, iasrLocal->destroyInstance(asrInstanceLocal)))
     //! Check error
 }
 ```
+
+### 8.1 MODERN C++ WRAPPER APPROACH
+
+The C++ wrapper uses RAII for automatic resource management - no manual cleanup needed:
+
+```cpp
+{
+    // Initialize core
+    nvigi::Core core({ .sdkPath = "path/to/sdk" });
+    
+    // Create instance
+    auto instance = Instance::create(
+        ModelConfig{ /* ... */ },
+        d3d12_config,
+        vk_config,
+        core.loadInterface(),
+        core.unloadInterface()
+    ).value();
+    
+    // Use instance...
+    auto result = instance->transcribe(audio_data, audio_size);
+    
+    // Automatic cleanup when leaving scope!
+    // 1. instance is destroyed -> calls destroyInstance()
+    // 2. core is destroyed -> calls nvigiShutdown()
+}
+// All resources cleaned up automatically!
+```
+
+**Key Benefits:**
+- No manual `destroyInstance()` calls needed
+- No manual `nvigiUnloadInterface()` calls needed
+- Exception-safe: cleanup happens even if exceptions are thrown
+- Impossible to forget cleanup or get order wrong
+- Reference counting ensures interfaces stay valid
 
 ## 9.0 UNLOAD INTERFACE(S)
 
@@ -337,7 +835,33 @@ if(NVIGI_FAILED(result, nvigiUnloadInterface(nvigi::plugin::asr::ggml::cuda::kId
 } 
 ```
 
+### 9.1 MODERN C++ WRAPPER APPROACH
+
+Interface unloading is handled automatically by the wrapper - see section 8.1 above.
+
 ## APPENDIX
+
+### Supported Whisper Models
+
+The SDK supports the following Whisper models in GGML format (quantized for optimal performance):
+
+| Model | GUID | Description | Size |
+|-------|------|-------------|------|
+| Tiny | {4D180D1F-9267-44A8-A862-5575AB8E93EB} | Fastest, English-only model suitable for simple transcription tasks | 75 MB |
+| Small | {5CAD3A03-1272-4D43-9F3D-655417526170} | Good balance of speed and accuracy for English content | 150 MB |
+| Base | {807D0AEC-DD9A-4BD8-ADB1-EEADDA89DC00} | Improved accuracy over small, maintains good performance | 300 MB |
+| Medium | {ABD526A2-4AFE-4550-88E2-D9F70F68D8C3} | High accuracy model with reasonable performance | 1.5 GB |
+| Large | {9FE5583A-AF35-4823-9C9D-5FE990E8D868} | Most accurate model, requires more computational resources | 2.9 GB |
+
+### Model Selection Guide
+
+Choose a model based on your requirements:
+- **Tiny**: Best for real-time applications with limited resources
+- **Small/Base**: Good for general purpose transcription
+- **Medium**: Recommended for most applications requiring high accuracy
+- **Large**: Best for applications requiring maximum accuracy where performance is not critical
+
+> NOTE: 8-bit quantization is probably the best choice when it comes to balancing between memory consumption and accuracy
 
 ### WHISPER.CPP
 

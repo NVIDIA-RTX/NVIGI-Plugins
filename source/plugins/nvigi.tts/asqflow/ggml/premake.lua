@@ -1,10 +1,6 @@
 group "plugins/tts"
 
 project "nvigi.plugin.tts.asqflow-ggml.vk"
-	kind "SharedLib"
-	targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
-	objdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
-	
 	pluginBasicSetup("tts/asqflow/ggml")
 	
 	defines {
@@ -40,18 +36,14 @@ project "nvigi.plugin.tts.asqflow-ggml.vk"
 			externaldir .."asqflow.cpp/include/**.h"
 		}}
 
-		libdirs {externaldir .."vulkanSDK/Lib"}
-
-		filter {"system:windows", "configurations:Debug"}
-			libdirs {externaldir .."asqflow.cpp/vulkan/lib/Debug"}
-		filter {"system:windows", "configurations:not Debug"}
-			libdirs {externaldir .."asqflow.cpp/vulkan/lib/NotDebug"}
-		
-		filter {"system:windows"}
+		libdirs {
+			externaldir .."vulkanSDK/Lib",
+			externaldir .."asqflow.cpp/vulkan/lib/".."%{iif(cfg.buildcfg:startswith(\"Debug\"), \"Debug\", \"NotDebug\")}",
+			externaldir .."SimpleFarForTTS/lib/Release"
+		}
 		
 		links {"ggml-vulkan","ggml-base","ggml-cpu","asqflow","ggml", "vulkan-1.lib", "winmm"}
 		includedirs {externaldir .."SimpleFarForTTS/"}
-		libdirs {externaldir .."SimpleFarForTTS/lib/Release"}
 		links {"RivaNormalizer.lib"}
 
 	
@@ -68,10 +60,6 @@ project "nvigi.plugin.tts.asqflow-ggml.vk"
 	filter {}
 
 project "nvigi.plugin.tts.asqflow-ggml.cuda"
-	kind "SharedLib"
-	targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
-	objdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
-	
 	pluginBasicSetup("tts/asqflow/ggml")
 	
 	defines {
@@ -111,22 +99,16 @@ project "nvigi.plugin.tts.asqflow-ggml.cuda"
 		vpaths { ["ggml"] = {
 			externaldir .."asqflow.cpp/include/**.h"
 		}}
-
-		filter {"system:windows", "configurations:Debug"}
-			libdirs {externaldir .."asqflow.cpp/cuda/lib/Debug"}
-		filter {"system:windows", "configurations:not Debug"}
-			libdirs {externaldir .."asqflow.cpp/cuda/lib/NotDebug"}
-		
-		filter {"system:windows"}
 		
 		libdirs {
 			externaldir .."cuda//lib/x64",
+			externaldir .."asqflow.cpp/cuda/lib/".."%{iif(cfg.buildcfg:startswith(\"Debug\"), \"Debug\", \"NotDebug\")}",
+			externaldir .."SimpleFarForTTS/lib/Release"
 		}
 
 		links {"cuda.lib", "cublas.lib"}
 		links {"ggml-cuda","ggml-base","ggml-cpu","asqflow","ggml", "winmm"}
 		includedirs {externaldir .."SimpleFarForTTS/"}
-		libdirs {externaldir .."SimpleFarForTTS/lib/Release"}
 		links {"RivaNormalizer.lib"}
 
 	

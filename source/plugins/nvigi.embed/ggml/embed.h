@@ -140,7 +140,7 @@ namespace nvigi
 			const struct llama_model* model = llama_get_model(ctx);
 
 			// clear previous kv_cache values (irrelevant for embeddings)
-			llama_kv_self_clear(ctx);
+			llama_memory_clear(llama_get_memory(ctx), true);
 
 			// run model
 			LOG_INF("%s: n_tokens = %d, n_seq = %d\n", __func__, batch.n_tokens, n_seq);
@@ -152,7 +152,7 @@ namespace nvigi
 			} else if (!llama_model_has_encoder(model) && llama_model_has_decoder(model)) {
 				// decoder-only model
 				if (llama_decode(ctx, batch) < 0) {
-					LOG_ERR("%s : failed to decode\n", __func__);
+					LOG_ERR("%s : failed to process\n", __func__);
 				}
 			}
 
@@ -182,44 +182,79 @@ namespace nvigi
 		}
 
 		// Apply tokenizer to each prompt
-		nvigi::Result tokenize(llama_context* ctx, llama_model* model, common_params& params, std::vector<std::vector<int32_t>> &inputs) {
+		nvigi::Result tokenize(llama_context* ctx, llama_model* model, common_params& params, std::vector<std::vector<int32_t>> &inputs, const llama_vocab* vocab) {
+			const enum llama_pooling_type pooling_type = llama_pooling_type(ctx);
+
 			// split the prompt into lines
 			std::vector<std::string> prompts = split_lines(params.prompt, params.embd_sep);
 
 			// max batch size
 			const uint64_t n_batch = params.n_batch;
-			GGML_ASSERT(params.n_batch >= params.n_ctx);
+
+			// get added sep and eos token, if any
+			const std::string added_sep_token = llama_vocab_get_add_sep(vocab) ? llama_vocab_get_text(vocab, llama_vocab_sep(vocab)) : "";
+			const std::string added_eos_token = llama_vocab_get_add_eos(vocab) ? llama_vocab_get_text(vocab, llama_vocab_eos(vocab)) : "";
+			const char * rerank_prompt = llama_model_chat_template(model, "rerank");
 
 			// tokenize the prompts and trim
 			// Begin NVIDIA Modifications
 			// Our inputs are passed in, so we don't need a local variable here.  
 			// The for loop does some additional sanitization not found in the original code (i.e. containsNonUTF8 )
 			//std::vector<std::vector<int32_t>> inputs;
-			for (size_t i_prompt = 0; i_prompt < prompts.size(); ++i_prompt) {
-				const auto& prompt = prompts[i_prompt];
-				if (containsNonUTF8(prompt))
-				{
-					NVIGI_LOG_ERROR("Prompt %d contains non utf8 character", i_prompt);
-					return kResultNonUtf8;
-				}
+			for (const auto & prompt : prompts) {
+				std::vector<llama_token> inp;
 
-				auto inp = common_tokenize(ctx, prompt, true, true);
-				if (inp.size() > n_batch) {
-					LOG_ERR("%s: number of tokens in input line (%lld) exceeds batch size (%lld), increase batch size and re-run\n",
-                            __func__, (long long int) inp.size(), (long long int) n_batch);
-					return nvigi::kResultMaxTokensReached;
+				// split classification pairs and insert expected separator tokens
+				if (pooling_type == LLAMA_POOLING_TYPE_RANK && prompt.find(params.cls_sep) != std::string::npos) {
+					std::vector<std::string> pairs = split_lines(prompt, params.cls_sep);
+					if (rerank_prompt != nullptr) {
+						const std::string query = pairs[0];
+						const std::string doc = pairs[1];
+						std::string final_prompt = rerank_prompt;
+						string_replace_all(final_prompt, "{query}"   , query);
+						string_replace_all(final_prompt, "{document}", doc  );
+						inp = common_tokenize(vocab, final_prompt, true, true);
+					} else {
+						std::string final_prompt;
+						for (size_t i = 0; i < pairs.size(); i++) {
+							final_prompt += pairs[i];
+							if (i != pairs.size() - 1) {
+								if (!added_eos_token.empty()) {
+									final_prompt += added_eos_token;
+								}
+								if (!added_sep_token.empty()) {
+									final_prompt += added_sep_token;
+								}
+							}
+						}
+						inp = common_tokenize(ctx, final_prompt, true, true);
+					}
+				}
+				else {
+					
+					if (containsNonUTF8(prompt))
+					{
+						NVIGI_LOG_ERROR("Prompt %s contains non utf8 character", prompt.c_str());
+						return kResultNonUtf8;
+					}
+
+					inp = common_tokenize(ctx, prompt, true, true);
+					if (inp.size() > n_batch) {
+						LOG_ERR("%s: number of tokens in input line (%lld) exceeds batch size (%lld), increase batch size and re-run\n",
+								__func__, (long long int) inp.size(), (long long int) n_batch);
+						return nvigi::kResultMaxTokensReached;
+					}
 				}
 
 				inputs.push_back(inp);
 			}
 			// End NVIDIA Modifications
 
-			// check if the last token is SEP
+			// check if the last token is SEP/EOS
 			// it should be automatically added by the tokenizer when 'tokenizer.ggml.add_eos_token' is set to 'true'
 			for (auto& inp : inputs) {
-				//if (inp.empty() || inp.back() != llama_token_sep(model)) 
-				{
-					LOG_WRN("%s: last token in the prompt is not SEP\n", __func__);
+				if (inp.empty() || (inp.back() != llama_vocab_sep(vocab) && inp.back() != llama_vocab_eos(vocab))) {
+					LOG_WRN("%s: last token in the prompt is not SEP or EOS\n", __func__);
 					LOG_WRN("%s: 'tokenizer.ggml.add_eos_token' should be set to 'true' in the GGUF header\n", __func__);
 				}
 			}
@@ -241,15 +276,15 @@ namespace nvigi
 
 		nvigi::Result embed(llama_context* ctx, llama_model* model, common_params& params, std::vector<float>& embeddings)
 		{
-			params.embedding = true;
-			// For non-causal models, batch size must be equal to ubatch size
-			params.n_ubatch = params.n_batch;
+			// get max number of sequences per batch
+			const int n_seq_max = llama_max_parallel_sequences();
+
+			// Begin NVidia Modification
+			// All params type modifications (i.e. instanceData->params.embedding = true;)
+			// should happen in embed.cpp prior to calling common_init_from_params
+			// End NVidia Modification
 
 			//print_build_info();
-
-			if (params.sampling.seed == LLAMA_DEFAULT_SEED) {
-				params.sampling.seed = static_cast<decltype(params.sampling.seed)>(time(NULL));
-			}
 
 			LOG_INF("seed  = %u", params.sparams.seed);
 
@@ -261,8 +296,10 @@ namespace nvigi
 				return kResultInvalidParameter;
 			}
 
+			const llama_vocab * vocab = llama_model_get_vocab(model);
+
 			const int n_ctx_train = llama_model_n_ctx_train(model);
-			const int n_ctx = llama_n_ctx(ctx);
+			const int n_ctx		  = llama_n_ctx(ctx);
 
 			const enum llama_pooling_type pooling_type = llama_pooling_type(ctx);
 
@@ -287,7 +324,7 @@ namespace nvigi
 
 			// tokenize the prompts and trim
 			std::vector<std::vector<int32_t>> inputs;
-			nvigi::Result res = tokenize(ctx, model, params, inputs);
+			nvigi::Result res = tokenize(ctx, model, params, inputs, vocab);
 			if (res != kResultOk)
 				return res;
 
@@ -312,7 +349,7 @@ namespace nvigi
 			const int n_embd = llama_model_n_embd(model);
 			// Begin NVIDIA Modification
 			// we take embedding as input, compared to LlamaCPP embedding.cpp which creates a local here.
-			embeddings.resize(n_embd_count * n_embd);
+			embeddings.resize(n_embd_count * n_embd, 0);
 			// End NVIDIA Modification
 			float* emb = embeddings.data();
 
@@ -326,7 +363,7 @@ namespace nvigi
 				const uint64_t n_toks = inp.size();
 
 				// encode if at capacity
-				if (batch.n_tokens + n_toks > n_batch) {
+				if (batch.n_tokens + n_toks > n_batch || s >= n_seq_max) {
 					float* out = emb + e * n_embd;
 					batch_decode(ctx, batch, out, s, n_embd, params.embd_normalize);
 					e += pooling_type == LLAMA_POOLING_TYPE_NONE ? batch.n_tokens : s;
@@ -342,6 +379,15 @@ namespace nvigi
 			// final batch
 			float* out = emb + e * n_embd;
 			batch_decode(ctx, batch, out, s, n_embd, params.embd_normalize);
+
+			// Begin NVidia Modification
+			// In embedding.cpp, the end of the main method has a large section that deals with printing the output if requested, which this API 
+			// does not require.
+			// if (params.embd_out.empty()) {
+			// ...
+			// 
+			// End NVidia Modification
+
 			llama_batch_free(batch);
 			// Begin NVIDIA Modifications
 			// We free the context and model in ggmlDestroyInstance instead.

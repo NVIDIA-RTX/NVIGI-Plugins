@@ -85,12 +85,20 @@ inline std::string getExecutablePath()
 #endif
 }
 
-void loggingCallback(nvigi::LogType type, const char* msg)
+void loggingPrint(nvigi::LogType type, const char* msg)
 {
 #ifdef NVIGI_WINDOWS
     OutputDebugStringA(msg);
 #endif
     std::cout << msg;
+}
+
+void loggingCallback(nvigi::LogType type, const char* msg)
+{
+#ifndef NVIGI_DEBUG
+    if (type == nvigi::LogType::eError)
+#endif
+        loggingPrint(type, msg);
 }
 
 template<typename T>
@@ -106,7 +114,7 @@ bool unloadInterface(nvigi::PluginID feature, T*& _interface)
     }
     else
     {
-        loggingCallback(nvigi::LogType::eError, "Failed to unload interface");
+        loggingPrint(nvigi::LogType::eError, "Failed to unload interface");
         return false;
     }
 
@@ -131,6 +139,8 @@ struct NVIGIAppCtx
 
 int InitNVIGI(NVIGIAppCtx& nvigiCtx, const std::string& pathToSDKUtf8)
 {
+    loggingPrint(nvigi::LogType::eInfo, "Initializing NVIGI\n");
+
 #ifdef NVIGI_WINDOWS
     auto libPath = pathToSDKUtf8 + "/nvigi.core.framework.dll";
 #else
@@ -139,7 +149,7 @@ int InitNVIGI(NVIGIAppCtx& nvigiCtx, const std::string& pathToSDKUtf8)
     nvigiCtx.coreLib = LoadLibraryA(libPath.c_str());
     if (nvigiCtx.coreLib == nullptr)
     {
-        loggingCallback(nvigi::LogType::eError, "Could not load NVIGI core library");
+        loggingPrint(nvigi::LogType::eError, "Could not load NVIGI core library");
         return -1;
     }
 
@@ -151,7 +161,7 @@ int InitNVIGI(NVIGIAppCtx& nvigiCtx, const std::string& pathToSDKUtf8)
     if (ptr_nvigiInit == nullptr || ptr_nvigiShutdown == nullptr ||
         ptr_nvigiLoadInterface == nullptr || ptr_nvigiUnloadInterface == nullptr)
     {
-        loggingCallback(nvigi::LogType::eError, "Could not load NVIGI core library");
+        loggingPrint(nvigi::LogType::eError, "Could not load NVIGI core library");
         return -1;
     }
 
@@ -162,26 +172,28 @@ int InitNVIGI(NVIGIAppCtx& nvigiCtx, const std::string& pathToSDKUtf8)
 
     nvigi::Preferences pref{};
     pref.logLevel = nvigi::LogLevel::eVerbose;
-    pref.showConsole = true;
+    pref.showConsole = false;
     pref.numPathsToPlugins = 1;
     pref.utf8PathsToPlugins = paths;
-    pref.logMessageCallback = pref.showConsole ? (nvigi::PFun_LogMessageCallback*)nullptr : loggingCallback; // avoid duplicating logs in the console
+    pref.logMessageCallback = loggingCallback; // avoid duplicating logs in the console
     pref.utf8PathToLogsAndData = pathToSDKUtf8.c_str();
 
     if (NVIGI_FAILED(result, ptr_nvigiInit(pref, nullptr, nvigi::kSDKVersion)))
     {
-        loggingCallback(nvigi::LogType::eError, "NVIGI init failed");
+        loggingPrint(nvigi::LogType::eError, "NVIGI init failed");
         return -1;
     }
 
+    loggingPrint(nvigi::LogType::eInfo, "Initializing NVIGI succeeded\n");
+
     return 0;
-    }
+}
 
 int ShutdownNVIGI(NVIGIAppCtx& nvigiCtx)
 {
     if (NVIGI_FAILED(result, ptr_nvigiShutdown()))
     {
-        loggingCallback(nvigi::LogType::eError, "Error in 'nvigiShutdown'");
+        loggingPrint(nvigi::LogType::eError, "Error in 'nvigiShutdown'");
         return -1;
     }
 
@@ -196,10 +208,12 @@ int ShutdownNVIGI(NVIGIAppCtx& nvigiCtx)
 
 int InitEmbed(NVIGIAppCtx& nvigiCtx, const std::string& modelDir)
 {
+    loggingPrint(nvigi::LogType::eInfo, "Initializing Embed\n");
+
     //! Embed Interface
     if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigi::plugin::embed::ggml::cuda::kId, &nvigiCtx.iembed, ptr_nvigiLoadInterface)))
     {
-        loggingCallback(nvigi::LogType::eError, "Could not query Embed interface");
+        loggingPrint(nvigi::LogType::eError, "Could not query Embed interface");
         return -1;
     }
 
@@ -208,7 +222,7 @@ int InitEmbed(NVIGIAppCtx& nvigiCtx, const std::string& modelDir)
     
     if (NVIGI_FAILED(result, embedParams.chain(embedCommon)))
     {
-        loggingCallback(nvigi::LogType::eError, "Embed param chaining failed");
+        loggingPrint(nvigi::LogType::eError, "Embed param chaining failed");
         return -1;
     }
     embedCommon.utf8PathToModels = modelDir.c_str();
@@ -238,6 +252,8 @@ int InitEmbed(NVIGIAppCtx& nvigiCtx, const std::string& modelDir)
     if (NVIGI_FAILED(result, nvigiCtx.iembed->createInstance(embedParams, &nvigiCtx.embedInst)))
         return -1;
 
+    loggingPrint(nvigi::LogType::eInfo, "Initializing Embed succeeded\n");
+
     return 0;
 }
 
@@ -248,13 +264,13 @@ int ReleaseEmbed(NVIGIAppCtx& nvigiCtx)
 
     if (NVIGI_FAILED(result, nvigiCtx.iembed->destroyInstance(nvigiCtx.embedInst)))
     {
-        loggingCallback(nvigi::LogType::eError, "Failed to destroy embed instance");
+        loggingPrint(nvigi::LogType::eError, "Failed to destroy embed instance");
         return -1;
     }
 
     if (!unloadInterface(nvigi::plugin::embed::ggml::cuda::kId, nvigiCtx.iembed))
     {
-        loggingCallback(nvigi::LogType::eError, "Failed to release embed interface");
+        loggingPrint(nvigi::LogType::eError, "Failed to release embed interface");
         return -1;
     }
 
@@ -263,10 +279,12 @@ int ReleaseEmbed(NVIGIAppCtx& nvigiCtx)
 
 int InitGPT(NVIGIAppCtx& nvigiCtx, const std::string& modelDir)
 {
+    loggingPrint(nvigi::LogType::eInfo, "Initializing GPT\n");
+
     //! GPT Interface
     if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigi::plugin::gpt::ggml::cuda::kId, &nvigiCtx.igpt, ptr_nvigiLoadInterface)))
     {
-        loggingCallback(nvigi::LogType::eError, "Could not query GPT interface");
+        loggingPrint(nvigi::LogType::eError, "Could not query GPT interface");
         return -1;
     }
 
@@ -279,7 +297,7 @@ int InitGPT(NVIGIAppCtx& nvigiCtx, const std::string& modelDir)
     gptCommon.modelGUID = "{8E31808B-C182-4016-9ED8-64804FF5B40D}"; // nemotron4-mini-instruct v0.1.3
     if (NVIGI_FAILED(result, gptCommon.chain(gptParams)))
     {
-        loggingCallback(nvigi::LogType::eError, "GPT param chaining failed");
+        loggingPrint(nvigi::LogType::eError, "GPT param chaining failed");
         return -1;
     }
 
@@ -289,6 +307,8 @@ int InitGPT(NVIGIAppCtx& nvigiCtx, const std::string& modelDir)
         return -1;
 
     auto result = nvigiCtx.igpt->createInstance(gptCommon, &nvigiCtx.gptInst);
+
+    loggingPrint(nvigi::LogType::eInfo, "Initializing GPT succeeded\n");
 
     return 0;
 }
@@ -300,13 +320,13 @@ int ReleaseGPT(NVIGIAppCtx& nvigiCtx)
 
     if (NVIGI_FAILED(result, nvigiCtx.igpt->destroyInstance(nvigiCtx.gptInst)))
     {
-        loggingCallback(nvigi::LogType::eError, "Failed to destroy GPT instance");
+        loggingPrint(nvigi::LogType::eError, "Failed to destroy GPT instance");
         return -1;
     }
 
     if (!unloadInterface(nvigi::plugin::gpt::ggml::cuda::kId, nvigiCtx.igpt))
     {
-        loggingCallback(nvigi::LogType::eError, "Failed to release GPT interface");
+        loggingPrint(nvigi::LogType::eError, "Failed to release GPT interface");
         return -1;
     }
 
@@ -362,7 +382,7 @@ void GetCompletion(NVIGIAppCtx& nvigiCtx, const std::string& system_prompt, cons
                 if ( !userDataBlock->terminator_found )
                 {
                     userDataBlock->response += response;
-                    loggingCallback(nvigi::LogType::eInfo, response.c_str());
+                    loggingPrint(nvigi::LogType::eInfo, response.c_str());
                 }
             }
             userDataBlock->done.store(state == nvigi::kInferenceExecutionStateDone);
@@ -374,7 +394,7 @@ void GetCompletion(NVIGIAppCtx& nvigiCtx, const std::string& system_prompt, cons
 
     if (ctx.instance->evaluate(&ctx) != nvigi::kResultOk)
     {
-        loggingCallback(nvigi::LogType::eError, "GPT evaluate failed");
+        loggingPrint(nvigi::LogType::eError, "GPT evaluate failed");
     }
     // ctx is held in this scope, so we can't let it go out of scope while the LLM is evaluating.
     while (!userData.done);
@@ -402,7 +422,7 @@ static std::string removeNonUTF8(const std::string& input)
         else 
         {
             // Optional - this could be rather noisy in the logs
-            // loggingCallback(nvigi::LogType::eWarn, "Non utf8 character has been removed");
+            // loggingPrint(nvigi::LogType::eWarn, "Non utf8 character has been removed");
         }
     }
     return output;
@@ -540,7 +560,7 @@ void GenerateEmbeddings(nvigi::IEmbed* iembed, nvigi::InferenceInstance* instanc
     nvigi::Result res = ctx.instance->evaluate(&ctx);
     if (res != nvigi::kResultOk)
     {
-        loggingCallback(nvigi::LogType::eError, "Embed evaluate failed");
+        loggingPrint(nvigi::LogType::eError, "Embed evaluate failed");
     }
 
     while (!done);
@@ -552,7 +572,7 @@ void CreateTextEmbeddings(NVIGIAppCtx& nvigiCtx, const std::string& textfile, Ve
     if (!loadText(textfile, text))
     {
         std::string errorMsg = std::string("Failed to load ") + textfile;
-        loggingCallback(nvigi::LogType::eError, errorMsg.c_str() );
+        loggingPrint(nvigi::LogType::eError, errorMsg.c_str() );
     }
 
     text = removeNonUTF8(text);
@@ -604,7 +624,7 @@ int main(int argc, char** argv)
 
     if (argc != 3)
     {
-        loggingCallback(nvigi::LogType::eError, "nvigi.rag <path to models> <text file>");
+        loggingPrint(nvigi::LogType::eError, "nvigi.rag <path to models> <text file>");
         return -1;
     }
     modelDir = argv[1];
@@ -620,14 +640,14 @@ int main(int argc, char** argv)
     //! Embed Instance
     if (InitEmbed(nvigiCtx, modelDir))
     {
-        loggingCallback(nvigi::LogType::eError, "Could not create GPT instance");
+        loggingPrint(nvigi::LogType::eError, "Could not create Embed instance");
         return -1;
     }
 
     //! GPT Instance
     if (InitGPT(nvigiCtx, modelDir))
     {
-        loggingCallback(nvigi::LogType::eError, "Could not create GPT instance");
+        loggingPrint(nvigi::LogType::eError, "Could not create GPT instance");
         return -1;
     }
 

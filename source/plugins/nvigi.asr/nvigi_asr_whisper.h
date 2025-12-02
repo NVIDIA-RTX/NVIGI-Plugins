@@ -40,14 +40,20 @@ enum class ASRWhisperSamplingStrategy : uint32_t
 // {08DB14D4-A87F-4BBB-B3FF-5C848259EDFD}
 struct alignas(8) ASRWhisperCreationParameters {
     ASRWhisperCreationParameters() {}; 
-    NVIGI_UID(UID({ 0x8db14d4, 0xa87f, 0x4bbb,{ 0xb3, 0xff, 0x5c, 0x84, 0x82, 0x59, 0xed, 0xfd } }), kStructVersion2);
+    NVIGI_UID(UID({ 0x8db14d4, 0xa87f, 0x4bbb,{ 0xb3, 0xff, 0x5c, 0x84, 0x82, 0x59, 0xed, 0xfd } }), kStructVersion3);
     //! Defaults to "en" if not specified
     const char* language{};
 
     //! v2
-    
-    //! Use flash attenuation
-    bool flashAtt{};
+    bool flashAtt{}; // Use flash attenuation
+    //! v3
+    bool translate{}; // if true, translates to english
+    bool detectLanguage{}; // if true, auto-detects the spoken language
+    int32_t lengthMs = 60000; // length of audio segments, in milliseconds
+    int32_t keepMs = 200; // amount of previous audio to keep as context for streaming mode, in milliseconds
+    int32_t stepMs = 2000; // step size for streaming mode, in milliseconds
+
+    //! v4+ members go here, remember to update the kStructVersionN in the above NVIGI_UID macro!
 };
 
 NVIGI_VALIDATE_STRUCT(ASRWhisperCreationParameters)
@@ -55,10 +61,21 @@ NVIGI_VALIDATE_STRUCT(ASRWhisperCreationParameters)
 // {53068401-DD81-41B8-9896-FE9DD613F852}
 struct alignas(8) ASRWhisperRuntimeParameters {
     ASRWhisperRuntimeParameters() {}; 
-    NVIGI_UID(UID({ 0x53068401, 0xdd81, 0x41b8,{ 0x98, 0x96, 0xfe, 0x9d, 0xd6, 0x13, 0xf8, 0x52 } }), kStructVersion1);
+    NVIGI_UID(UID({ 0x53068401, 0xdd81, 0x41b8,{ 0x98, 0x96, 0xfe, 0x9d, 0xd6, 0x13, 0xf8, 0x52 } }), kStructVersion2);
     ASRWhisperSamplingStrategy sampling = ASRWhisperSamplingStrategy::eGreedy;
-    int32_t bestOf = 1;
-    int32_t beamSize = -1;
+    int32_t bestOf = 1; // for greedy sampling, number of candidates to consider, 1 = disabled
+    int32_t beamSize = -1; // for beam search, number of beams, -1 = disabled
+    //! v2
+    const char* prompt{}; // optional prompt to guide the transcription
+    bool noContext = true; // if true, do not use previous context to influence the transcription
+    bool suppressBlank = true; // if true, suppresses the blank token in the output
+    bool suppressNonSpeechTokens = false; // if true, suppresses all non-speech tokens in the output
+    float temperature = 0.0f; // temperature for sampling, 0.0 = greedy, higher values = more random
+    float entropyThold = 2.4f; // threshold for entropy-based suppression, 0.0 = disabled
+    float logprobThold = -1.0f; // threshold for log-probability-based suppression, 0.0 = disabled
+    float noSpeechThold = 0.6f; // threshold for no-speech detection, 0.0 = disabled
+
+    //! v3+ members go here, remember to update the kStructVersionN in the above NVIGI_UID macro!
 };
 
 NVIGI_VALIDATE_STRUCT(ASRWhisperRuntimeParameters)
@@ -70,6 +87,8 @@ struct alignas(8) ASRWhisperCapabilitiesAndRequirements {
     CommonCapabilitiesAndRequirements* common;
     //! "auto" indicates multi-language support with optional auto detection
     const char** supportedLanguages{};
+    
+    //! v2+ members go here, remember to update the kStructVersionN in the above NVIGI_UID macro!
 };
 
 NVIGI_VALIDATE_STRUCT(ASRWhisperCapabilitiesAndRequirements)

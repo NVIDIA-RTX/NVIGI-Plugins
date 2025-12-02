@@ -100,12 +100,20 @@ inline std::string getExecutablePath()
 #endif
 }
 
-void loggingCallback(nvigi::LogType type, const char* msg)
+void loggingPrint(nvigi::LogType type, const char* msg)
 {
 #ifdef NVIGI_WINDOWS
     OutputDebugStringA(msg);
 #endif
     std::cout << msg;
+}
+
+void loggingCallback(nvigi::LogType type, const char* msg)
+{
+#ifndef NVIGI_DEBUG
+    if (type == nvigi::LogType::eError)
+#endif
+        loggingPrint(type, msg);
 }
 
 struct NVIGIAppCtx
@@ -128,6 +136,8 @@ constexpr uint32_t n_threads = 16;
 
 int InitNVIGI(NVIGIAppCtx& nvigiCtx, const std::string& pathToSDKUtf8)
 {
+    loggingPrint(nvigi::LogType::eInfo, "Initializing NVIGI\n");
+
 #ifdef NVIGI_WINDOWS
     auto libPath = pathToSDKUtf8 + "/nvigi.core.framework.dll";
 #else
@@ -136,7 +146,7 @@ int InitNVIGI(NVIGIAppCtx& nvigiCtx, const std::string& pathToSDKUtf8)
     nvigiCtx.coreLib = LoadLibraryA(libPath.c_str());
     if (nvigiCtx.coreLib == nullptr)
     {
-        loggingCallback(nvigi::LogType::eError, "Could not load NVIGI core library");
+        loggingPrint(nvigi::LogType::eError, "Could not load NVIGI core library");
         return -1;
     }
 
@@ -148,7 +158,7 @@ int InitNVIGI(NVIGIAppCtx& nvigiCtx, const std::string& pathToSDKUtf8)
     if (ptr_nvigiInit == nullptr || ptr_nvigiShutdown == nullptr ||
         ptr_nvigiLoadInterface == nullptr || ptr_nvigiUnloadInterface == nullptr)
     {
-        loggingCallback(nvigi::LogType::eError, "Could not load NVIGI core library");
+        loggingPrint(nvigi::LogType::eError, "Could not load NVIGI core library");
         return -1;
     }
 
@@ -163,17 +173,19 @@ int InitNVIGI(NVIGIAppCtx& nvigiCtx, const std::string& pathToSDKUtf8)
 #else
     pref.logLevel = nvigi::LogLevel::eOff;
 #endif
-    pref.showConsole = true;
+    pref.showConsole = false;
     pref.numPathsToPlugins = 1;
     pref.utf8PathsToPlugins = paths;
-    pref.logMessageCallback = pref.showConsole ? (nvigi::PFun_LogMessageCallback*)nullptr : loggingCallback; // avoid duplicating logs in the console
+    pref.logMessageCallback = loggingCallback; // avoid duplicating logs in the console
     pref.utf8PathToLogsAndData = pathToSDKUtf8.c_str();
 
     if (NVIGI_FAILED(result, ptr_nvigiInit(pref, nullptr, nvigi::kSDKVersion)))
     {
-        loggingCallback(nvigi::LogType::eError, "NVIGI init failed");
+        loggingPrint(nvigi::LogType::eError, "NVIGI init failed");
         return -1;
     }
+
+    loggingPrint(nvigi::LogType::eInfo, "Initializing NVIGI succeeded\n");
 
     return 0;
 }
@@ -182,7 +194,7 @@ int ShutdownNVIGI(NVIGIAppCtx& nvigiCtx)
 {
     if (NVIGI_FAILED(result, ptr_nvigiShutdown()))
     {
-        loggingCallback(nvigi::LogType::eError, "Error in 'nvigiShutdown'");
+        loggingPrint(nvigi::LogType::eError, "Error in 'nvigiShutdown'");
         return -1;
     }
 
@@ -193,10 +205,12 @@ int ShutdownNVIGI(NVIGIAppCtx& nvigiCtx)
 
 int CreatePipeline(NVIGIAppCtx& nvigiCtx, const std::string& modelDir, size_t vram)
 {
+    loggingPrint(nvigi::LogType::eInfo, "Initializing Pipeline\n");
+
     //! AIP
     if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigi::plugin::ai::pipeline::kId, &nvigiCtx.iaip, ptr_nvigiLoadInterface)))
     {
-        loggingCallback(nvigi::LogType::eError, "'nvigiGetInterface' failed");
+        loggingPrint(nvigi::LogType::eError, "'nvigiGetInterface' failed");
         return -1;
     }
 
@@ -210,7 +224,7 @@ int CreatePipeline(NVIGIAppCtx& nvigiCtx, const std::string& modelDir, size_t vr
         asrCommon.modelGUID = "{5CAD3A03-1272-4D43-9F3D-655417526170}";
         if (NVIGI_FAILED(result, asrCommon.chain(asrParams)))
         {
-            loggingCallback(nvigi::LogType::eError, "ASR param chaining failed");
+            loggingPrint(nvigi::LogType::eError, "ASR param chaining failed");
             return -1;
         }
     }
@@ -231,7 +245,7 @@ int CreatePipeline(NVIGIAppCtx& nvigiCtx, const std::string& modelDir, size_t vr
         gptCommon.modelGUID = "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}";
         if (NVIGI_FAILED(result, gptCommon.chain(gptParams)))
         {
-            loggingCallback(nvigi::LogType::eError, "GPT param chaining failed");
+            loggingPrint(nvigi::LogType::eError, "GPT param chaining failed");
             return -1;
         }
     }
@@ -253,9 +267,11 @@ int CreatePipeline(NVIGIAppCtx& nvigiCtx, const std::string& modelDir, size_t vr
     //! Create pipeline instance
     if (NVIGI_FAILED(result, nvigiCtx.iaip->createInstance(aipParams, &nvigiCtx.pipelineInst)))
     {
-        loggingCallback(nvigi::LogType::eError, "Error creating pipeline plugin instance");
+        loggingPrint(nvigi::LogType::eError, "Error creating pipeline plugin instance");
         return -1;
     }
+
+    loggingPrint(nvigi::LogType::eInfo, "Initializing Pipeline succeeded\n");
 
     return 0;
 }
@@ -264,13 +280,13 @@ int ReleasePipeline(NVIGIAppCtx& nvigiCtx)
 {
     if (NVIGI_FAILED(result, nvigiCtx.iaip->destroyInstance(nvigiCtx.pipelineInst)))
     {
-        loggingCallback(nvigi::LogType::eError, "Error destroying pipeline instance");
+        loggingPrint(nvigi::LogType::eError, "Error destroying pipeline instance");
         return -1;
     }
 
     if (NVIGI_FAILED(result, ptr_nvigiUnloadInterface(nvigi::plugin::ai::pipeline::kId, nvigiCtx.iaip)))
     {
-        loggingCallback(nvigi::LogType::eError, "Error unloading pipeline interface");
+        loggingPrint(nvigi::LogType::eError, "Error unloading pipeline interface");
         return -1;
     }
 
@@ -288,7 +304,7 @@ nvigi::InferenceExecutionState ASRCallback(const nvigi::InferenceExecutionContex
     if (response.find("<JSON>") != std::string::npos)
     {
         std::string text = "asr stats:" + response + "\n";
-        loggingCallback(nvigi::LogType::eInfo, text.c_str());
+        loggingPrint(nvigi::LogType::eInfo, text.c_str());
     }
     else
     {
@@ -297,7 +313,7 @@ nvigi::InferenceExecutionState ASRCallback(const nvigi::InferenceExecutionContex
     if (state == nvigi::kInferenceExecutionStateDone)
     {
         std::string text = "asr output:" + appCtx.asrOutput + "\n";
-        loggingCallback(nvigi::LogType::eInfo, text.c_str());
+        loggingPrint(nvigi::LogType::eInfo, text.c_str());
     }
 
     return state;
@@ -314,7 +330,7 @@ nvigi::InferenceExecutionState GPTCallback(const nvigi::InferenceExecutionContex
     if (state == nvigi::kInferenceExecutionStateDone)
     {
         std::string text = "gpt output:" + appCtx.gptOutput + "\n";
-        loggingCallback(nvigi::LogType::eInfo, text.c_str());
+        loggingPrint(nvigi::LogType::eInfo, text.c_str());
     }
 
     return state;
@@ -358,7 +374,7 @@ int RunInference(NVIGIAppCtx& nvigiCtx, const std::vector<int16_t>& wav, const s
     ctx.inputs = &inputs;
     if (NVIGI_FAILED(result, nvigiCtx.pipelineInst->evaluate(&ctx)))
     {
-        loggingCallback(nvigi::LogType::eError, "Error running pipeline inference");
+        loggingPrint(nvigi::LogType::eError, "Error running pipeline inference");
         return -1;
     }
 
@@ -385,7 +401,7 @@ int main(int argc, char** argv)
 
     if (argc != 3)
     {
-        loggingCallback(nvigi::LogType::eError, "nvigi.basic <path to models> <path to wav file>");
+        loggingPrint(nvigi::LogType::eError, "nvigi.basic <path to models> <path to wav file>");
         return -1;
     }
     std::string modelDir = argv[1];
@@ -415,13 +431,13 @@ int main(int argc, char** argv)
         };
     if (!checkPath(audioFile))
     {
-        loggingCallback(nvigi::LogType::eError, "Provided audio file path does not meet requirements. Provided path must be at most 512 char long and must not contain '://'");
+        loggingPrint(nvigi::LogType::eError, "Provided audio file path does not meet requirements. Provided path must be at most 512 char long and must not contain '://'");
         return -1;
     }
     auto wav = read(audioFile.c_str());
     if (wav.empty())
     {
-        loggingCallback(nvigi::LogType::eError, "Could not load input WAV file");
+        loggingPrint(nvigi::LogType::eError, "Could not load input WAV file");
         return -1;
     }
 

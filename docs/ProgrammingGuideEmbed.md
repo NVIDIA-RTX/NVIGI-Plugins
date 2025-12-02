@@ -3,6 +3,8 @@
 
 The focus of this guide is on using In-Game Inferencing to integrate an embedding model into an application. One example would be [E5-Large-Unsupervised](https://huggingface.co/intfloat/e5-large-unsupervised)
 
+> **MIN RUNTIME SPEC:** Note that all Embedding backends require a CPU supporting AVX2 instructions.  Support for this instruction extension is ubiquitous in modern gaming CPUs, but older hardware may not support it.
+
 > **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the [rag sample](../source/samples/nvigi.rag/rag.cpp)
 
 ## 1.0 INITIALIZE AND SHUTDOWN

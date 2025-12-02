@@ -78,7 +78,7 @@ NVIGI_VALIDATE_STRUCT(GPTCreationParameters)
 // {FEB5F4A9-8A02-4864-8757-081F42381160}
 struct alignas(8) GPTRuntimeParameters {
     GPTRuntimeParameters() {}; 
-    NVIGI_UID(UID({ 0xfeb5f4a9, 0x8a02, 0x4864,{ 0x87, 0x57, 0x8, 0x1f, 0x42, 0x38, 0x11, 0x60 } }), kStructVersion4);
+    NVIGI_UID(UID({ 0xfeb5f4a9, 0x8a02, 0x4864,{ 0x87, 0x57, 0x8, 0x1f, 0x42, 0x38, 0x11, 0x60 } }), kStructVersion5);
     uint32_t seed = 0xFFFFFFFF;     // RNG seed
     int32_t tokensToPredict = -1;   // new tokens to predict
     int32_t batchSize = 512;        // batch size for prompt processing (must be >=32 to use BLAS)
@@ -93,17 +93,20 @@ struct alignas(8) GPTRuntimeParameters {
     const char* reversePrompt{};    // reverse prompt for the interactive mode
     const char* prefix{};           // prefix for the user input
     const char* suffix{};           // suffix for the user input
-    // v2
+    //! v2
     float frameTimeMs = 0.0f;           // optional, used to limit the token generation rate, disabled by default
     int32_t targetTokensPerSecond = -1; // optional, used to limit the token generation rate, disabled by default
-
-    //! v3+ members go here, remember to update the kStructVersionN in the above NVIGI_UID macro!
-    bool promptPretemplatized = false;          // if true, will not attempt to apply any sort of prompt templatization from the model.  User is responsible for getting it right.
-
-    //! v4+ members go here, remember to update the kStructVersionN in the above NVIGI_UID macro!
+    //! v3
+    bool promptPretemplatized = false;   // if true, will not attempt to apply any sort of prompt templatization from the model.  User is responsible for getting it right.
+    //! v4
     size_t numLoras{};              // num loras being updated
     const char** loraNames{};       // names of the loras being updated.  Must match one of the names set during GPTCreationParameters
     const float* loraScales{};      // scale of the loras being updated.  Can use this to dynamically turn on/off loras per evaluate call.
+    //! v5
+    bool useJinja = true;           // if true use jinja formatting for prompt templates
+    const char* chatTemplate{};     // provide custom template to use instead of the internal one (if any). It is recommended to provide custom template when using new models since internal defaults might not work correctly.
+
+    //! New members go here, remember to update the kStructVersionN in the above NVIGI_UID macro!
 };
 
 NVIGI_VALIDATE_STRUCT(GPTRuntimeParameters)

@@ -16,6 +16,7 @@
 #include "source/plugins/nvigi.tts/nvigi_tts.h"
 #include "source/utils/nvigi.ai/ai.h"
 #include "source/utils/nvigi.hwi/cuda/runtime_context_scope.h"
+#include "source/utils/nvigi.poll/poll.h"
 #include "nvigi_stl_helpers.h"
 #include <atomic>
 #include <chrono>
@@ -61,12 +62,14 @@ struct InferenceContext
     {
     }
 
+    poll::PollContext<nvigi::InferenceExecutionState> pollCtx;
     json modelInfo;
     ASqFlow *asqflow{};
     PromptsBuffer promptsToProcess;
 
     InferenceContextSync sync{};
     InferenceParameters params;
+    std::atomic<bool> cancelled = false;  // Flag to request early cancellation
 
     std::vector<cudaStream_t> cudaStreams{};
 
@@ -147,6 +150,7 @@ struct ASqFlowContext
     // For example, interface we will export
     // ITemplateInfer api{};
     ITextToSpeech api{};
+    IPolledInferenceInterface polledApi{};
 
     // NOTE: No instance promptData should be here
     std::atomic<bool> initialized = false;
@@ -165,6 +169,7 @@ struct MyInstanceData
 
 nvigi::Result evaluate(nvigi::InferenceExecutionContext *execCtx);
 nvigi::Result evaluateAsync(nvigi::InferenceExecutionContext *execCtx);
+nvigi::Result cancelAsyncEvaluation(nvigi::InferenceExecutionContext *execCtx);
 
 } // namespace asqflow
 
@@ -465,6 +470,7 @@ nvigi::Result asqflowCreateInstance(const nvigi::NVIGIParameter *_params, nvigi:
     instance->getOutputSignature = asqflow::getOutputSignature;
     instance->evaluate = asqflow::evaluate;
     instance->evaluateAsync = asqflow::evaluateAsync;
+    instance->cancelAsyncEvaluation = asqflow::cancelAsyncEvaluation;
 
     *_instance = instance;
 
@@ -525,7 +531,8 @@ nvigi::Result asqflowEvaluate(nvigi::InferenceExecutionContext *execCtx, bool as
         return kResultInvalidParameter;
     }
 
-    if (!execCtx->callback)
+    // In async mode callback is optional since we can poll for results
+    if (!execCtx->callback && !async)
     {
         NVIGI_LOG_ERROR("ASqFlow inference callback not provided");
         return kResultInvalidParameter;
@@ -642,7 +649,16 @@ nvigi::Result asqflowEvaluate(nvigi::InferenceExecutionContext *execCtx, bool as
         // check for error
         if (state == nvigi::kInferenceExecutionStateInvalid)
         {
-            return execCtx->callback(execCtx, state, execCtx->callbackUserData);
+            if (execCtx->callback)
+            {
+                return execCtx->callback(execCtx, state, execCtx->callbackUserData);
+            }
+            else
+            {
+                // Using polled results
+                auto instance = (nvigi::asqflow::InferenceContext*)(execCtx->instance->data);
+                return instance->pollCtx.triggerCallback(state);
+            }
         }
 
 #ifndef NVIGI_PRODUCTION
@@ -705,7 +721,18 @@ nvigi::Result asqflowEvaluate(nvigi::InferenceExecutionContext *execCtx, bool as
             outputs = {slots.size(), slots.data()};
             execCtx->outputs = &outputs;
         }
-        res = execCtx->callback(execCtx, state, execCtx->callbackUserData);
+        
+        if (execCtx->callback)
+        {
+            res = execCtx->callback(execCtx, state, execCtx->callbackUserData);
+        }
+        else
+        {
+            // Using polled results
+            auto instance = (nvigi::asqflow::InferenceContext*)(execCtx->instance->data);
+            res = instance->pollCtx.triggerCallback(state);
+        }
+        
         //! Clear outputs since these are all local variables
         execCtx->outputs = {};
 
@@ -747,10 +774,11 @@ nvigi::Result asqflowEvaluate(nvigi::InferenceExecutionContext *execCtx, bool as
         if (!instance->sync.job.valid())
         {
             instance->sync.running.store(true);
+            instance->cancelled.store(false);  // Reset cancellation flag for new evaluation
             instance->sync.job =
                 std::async(std::launch::async,
                            [execCtx, instance, responseCallbackASqFlow, asqflowReturnOutputAudio]() -> nvigi::Result {
-                               while (instance->sync.running.load() && !instance->promptsToProcess.empty())
+                               while (instance->sync.running.load() && !instance->cancelled.load() && !instance->promptsToProcess.empty())
                                {
                                    nvigi::RuntimeContextScope scope(*instance);
                                    instance->promptsToProcess.read_and_pop(instance->params.textPrompt);
@@ -762,12 +790,27 @@ nvigi::Result asqflowEvaluate(nvigi::InferenceExecutionContext *execCtx, bool as
                                    }
                                    else
                                    {
+                                       // Check for cancellation before processing
+                                       if (instance->cancelled.load())
+                                       {
+                                           NVIGI_LOG_VERBOSE("TTS processing cancelled by user request");
+                                           return nvigi::kResultOk;
+                                       }
+                                       
+                                       // Pass cancellation flag to evaluate so it can check during chunk processing
+                                       instance->params.cancelled = &instance->cancelled;
                                        auto res = instance->asqflow->evaluate(instance->params, responseCallbackASqFlow, instance->cudaStreams[0]);
                                        if (res != nvigi::kResultOk)
                                        {
                                            return res;
                                        }
                                    }
+                               }
+                               // If cancelled, exit cleanly
+                               if (instance->cancelled.load())
+                               {
+                                   NVIGI_LOG_VERBOSE("TTS evaluation cancelled by user request");
+                                   return nvigi::kResultOk;
                                }
                                return nvigi::kResultOk;
                            });
@@ -785,6 +828,7 @@ nvigi::Result asqflowEvaluate(nvigi::InferenceExecutionContext *execCtx, bool as
         }
         nvigi::RuntimeContextScope scope(*instance);
         instance->params.textPrompt = promptData->getUTF8Text();
+        instance->params.cancelled = &instance->cancelled;  // Pass cancellation flag
         auto res = instance->asqflow->evaluate(instance->params, responseCallbackASqFlow, instance->cudaStreams[0]);
         return res;
     }
@@ -829,6 +873,82 @@ nvigi::Result asqflowDestroyInstance(const nvigi::InferenceInstance *instance)
     return kResultOk;
 }
 
+// Add new functions for polling support:
+Result asqflowGetResults(InferenceExecutionContext* execCtx, bool wait, InferenceExecutionState* state) {
+    if (!execCtx || !execCtx->instance) {
+        return kResultInvalidParameter;
+    }
+
+    auto instance = static_cast<asqflow::InferenceContext*>(execCtx->instance->data);
+    return instance->pollCtx.getResults(wait, state);
+}
+
+Result asqflowReleaseResults(InferenceExecutionContext* execCtx, InferenceExecutionState state) {
+    if (!execCtx || !execCtx->instance) {
+        return kResultInvalidParameter;
+    }
+
+    auto instance = static_cast<asqflow::InferenceContext*>(execCtx->instance->data);
+    return instance->pollCtx.releaseResults(state);
+}
+
+Result asqflowCancelAsyncEvaluation(InferenceExecutionContext* execCtx) {
+    if (!execCtx || !execCtx->instance) {
+        return kResultInvalidParameter;
+    }
+
+    auto instance = static_cast<asqflow::InferenceContext*>(execCtx->instance->data);
+    
+    // Check if async job is actually running
+    if (!instance->sync.job.valid())
+    {
+        NVIGI_LOG_WARN("cancelAsyncEvaluation called but no async evaluation is running");
+        return kResultNoImplementation;
+    }
+    
+    // Set cancellation flag to interrupt the evaluation loop as early as possible
+    instance->cancelled.store(true);
+    
+    // Stop the async job
+    {
+        std::lock_guard lock(instance->sync.mtx);
+        instance->sync.running.store(false);
+    }
+    
+    // Release any pending results
+    if (instance->pollCtx.checkResultPending())
+    {
+        instance->pollCtx.releaseResults(nvigi::kInferenceExecutionStateDone);
+    }
+    
+    // Wait for the job to complete with timeout (check every second for up to 10 seconds)
+    bool jobReady = false;
+    for (int i = 0; i < 10; ++i)
+    {
+        if (instance->sync.job.wait_for(std::chrono::seconds(1)) == std::future_status::ready)
+        {
+            jobReady = true;
+            break;
+        }
+    }
+    
+    if (jobReady)
+    {
+        nvigi::Result result;
+        if (NVIGI_FAILED(result, instance->sync.job.get()))
+        {
+            return result;
+        }
+    }
+    else
+    {
+        NVIGI_LOG_WARN("Async job timed out during cancellation");
+        return kResultTimedOut;
+    }
+    
+    return kResultOk;
+}
+
 //! Making sure our implementation is covered with our exception handler
 //!
 namespace asqflow
@@ -854,6 +974,21 @@ nvigi::Result evaluate(nvigi::InferenceExecutionContext *execCtx)
 nvigi::Result evaluateAsync(nvigi::InferenceExecutionContext *execCtx)
 {
     NVIGI_CATCH_EXCEPTION(asqflowEvaluate(execCtx, true));
+}
+
+nvigi::Result getResults(nvigi::InferenceExecutionContext* execCtx, bool wait, nvigi::InferenceExecutionState* state)
+{
+    NVIGI_CATCH_EXCEPTION(asqflowGetResults(execCtx, wait, state));
+}
+
+nvigi::Result releaseResults(nvigi::InferenceExecutionContext* execCtx, nvigi::InferenceExecutionState state)
+{
+    NVIGI_CATCH_EXCEPTION(asqflowReleaseResults(execCtx, state));
+}
+
+nvigi::Result cancelAsyncEvaluation(nvigi::InferenceExecutionContext* execCtx)
+{
+    NVIGI_CATCH_EXCEPTION(asqflowCancelAsyncEvaluation(execCtx));
 }
 
 } // namespace asqflow
@@ -909,6 +1044,11 @@ Result nvigiPluginRegister(framework::IFramework *framework)
     ctx.api.getCapsAndRequirements = asqflow::getCapsAndRequirements;
 
     framework->addInterface(ctx.feature, &ctx.api, 0);
+
+    // Add polled interface
+    ctx.polledApi.getResults = asqflow::getResults;
+    ctx.polledApi.releaseResults = asqflow::releaseResults;
+    framework->addInterface(ctx.feature, &ctx.polledApi, 0);
 
     if (!framework::getInterface(plugin::getContext()->framework, plugin::hwi::cuda::kId, &ctx.icig))
     {

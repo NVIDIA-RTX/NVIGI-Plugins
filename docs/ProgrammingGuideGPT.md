@@ -1,9 +1,10 @@
-
 # Generative Pre-Trained Transformers (GPT) Programming Guide
 
 The focus of this guide is on using In-Game Inferencing to integrate a GPT model into an application. One example would be [Meta Llama2](https://llama.meta.com)
 
 Please read the [Programming Guide for AI](nvigi_core/docs/ProgrammingGuideAI.md) located in the NVIGI Core package to learn more about overall AI inference API in NVIGI SDK.
+
+> **MIN RUNTIME SPEC:** Note that all GPT GGML-based backends require a CPU supporting AVX2 instructions.  Support for this instruction extension is ubiquitous in modern gaming CPUs, but older hardware may not support it.
 
 > **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the SDK's Basic command line sample [Source Code](../source/samples/nvigi.basic/basic.cpp) and [Docs](Samples.md).  The Basic command-line sample includes use of the GPT plugins to respond to text queries.
 
@@ -13,13 +14,38 @@ Please read the [Programming Guide for AI](nvigi_core/docs/ProgrammingGuideAI.md
 
 > **IMPORTANT NOTE: The D3D12 backend (nvigi.plugin.gpt.ggml.d3d12.dll) is provided only precompiled as a part of the downloadable binary pack (`nvigi_pack`).  It is not possible for developers to compile the D3D12 backend plugin from source in this release.**
 
-> **IMPORTANT NOTE: The D3D12 backend (nvigi.plugin.gpt.ggml.d3d12.dll) requires an NVIDIA R580 driver or newer in order to be available at runtime.**
+> **IMPORTANT NOTE: The D3D12 backend (nvigi.plugin.gpt.ggml.d3d12.dll) requires an NVIDIA R580 driver or newer in order to be available at runtime.** For optimal performance MS Agility SDK is required, for details please read [GPU UPLOAD HEAP (ReBar)](#d3d12)
 
 > **IMPORTANT NOTE: The CUDA backend (nvigi.plugin.gpt.ggml.cuda.dll) strongly recommends an NVIDIA R580 driver or newer in order to avoid a potential memory leak if CiG (CUDA in Graphics) is used and the application deletes D3D12 command queues mid-application.**
 
 ## 1.0 INITIALIZE AND SHUTDOWN
 
 Please read the [Programming Guide](nvigi_core/docs/ProgrammingGuide.md) located in the NVIGI Core package to learn more about initializing and shutting down NVIGI SDK. 
+
+### 1.1 MODERN C++ WRAPPER (RECOMMENDED)
+
+The NVIGI SDK provides modern C++ wrappers that simplify initialization and provide a cleaner API with RAII, `std::expected`, and builder patterns. The wrappers are located in `source/samples/nvigi.basic.cxx/` and can be used in your projects.
+
+```cpp
+#include "core.hpp"
+#include "gpt.hpp"
+
+using namespace nvigi::gpt;
+
+// Initialize NVIGI core with builder pattern
+nvigi::Core core({ 
+    .sdkPath = "path/to/sdk",
+    .logLevel = nvigi::LogLevel::eDefault,
+    .showConsole = true 
+});
+
+// Access system information
+const auto& sysInfo = core.getSystemInfo();
+std::cout << "Detected " << sysInfo.getNumPlugins() << " plugins\n";
+std::cout << "Detected " << sysInfo.getNumAdapters() << " adapters\n";
+```
+
+> **NOTE:** The C++ wrappers provide the same functionality as the low-level API but with modern C++ idioms. Both approaches are valid and can be mixed if needed.
 
 ## 2.0 OBTAIN GPT INTERFACE(S)
 
@@ -45,6 +71,17 @@ if(NVIGI_FAILED(res, nvigiGetInterface(nvigi::plugin::gpt::cloud::rest::kId, igp
 
 > **NOTE:**
 One can only obtain interface for a feature which is available on user system. Interfaces are valid as long as the underlying plugin is loaded and active.
+
+### 2.1 MODERN C++ WRAPPER APPROACH
+
+The C++ wrapper handles interface loading automatically during instance creation. You don't need to manually obtain interfaces:
+
+```cpp
+// No manual interface loading needed!
+// Just create the instance with your desired backend
+```
+
+See section 3.1 for complete instance creation examples using the wrapper.
 
 ## 3.0 CREATE GPT INSTANCE(S)
 
@@ -215,6 +252,74 @@ nvigi::InferenceInstance* gptInstanceCloud;
 > **NOTE:**
 > NVIGI model repository is provided with the pack under `data/nvigi.models`.
 
+### 3.3 MODERN C++ WRAPPER APPROACH
+
+The C++ wrapper simplifies instance creation with builder patterns and automatic resource management:
+
+```cpp
+#include "d3d12.hpp"  // or "vulkan.hpp"
+
+using namespace nvigi::gpt;
+
+// Setup D3D12 (if using D3D12 or CUDA backend)
+auto deviceAndQueue = nvigi::d3d12::D3D12Helper::create_best_compute_device();
+nvigi::d3d12::D3D12Config d3d12_config = {
+    .device = deviceAndQueue.device.Get(),
+    .command_queue = deviceAndQueue.compute_queue.Get(),
+    .create_committed_resource_callback = nvigi::d3d12::default_create_committed_resource,
+    .destroy_resource_callback = nvigi::d3d12::default_destroy_resource
+};
+
+// Or setup Vulkan (if using Vulkan backend)
+auto vk_objects = nvigi::vulkan::VulkanHelper::create_best_compute_device();
+nvigi::vulkan::VulkanConfig vk_config = {
+    .instance = vk_objects.instance,
+    .physical_device = vk_objects.physical_device,
+    .device = vk_objects.device,
+    .compute_queue = vk_objects.compute_queue,
+    .transfer_queue = vk_objects.transfer_queue,
+    .allocate_memory_callback = nvigi::vulkan::default_allocate_memory,
+    .free_memory_callback = nvigi::vulkan::default_free_memory
+};
+
+// Or setup Cloud
+CloudConfig cloud_config = {
+    .url = "https://my-endpoint.com",  // optional, default from model JSON
+    .token = "your_api_token",          // mandatory for cloud
+    .verbose = false,
+    .streaming = true
+};
+
+// Create instance with builder pattern
+auto instance = Instance::create(
+    ModelConfig{
+        .backend = "d3d12",  // or "cuda", "vulkan", "cloud"
+        .guid = "{175C5C5D-E978-41AF-8F11-880D0517C524}",
+        .model_path = "path/to/nvigi.models",
+        .context_size = 4096,
+        .num_threads = 4,
+        .vram_budget_mb = 8192,
+        .flash_attention = true,
+        .cache_type = "fp16"  // or "fp32", "q4_0", "q8_0"
+    },
+    d3d12_config,      // Pass your config based on backend
+    vk_config,         // Can pass both, unused ones are ignored
+    cloud_config,      // Only used if backend is "cloud"
+    core.loadInterface(),
+    core.unloadInterface()
+).value();  // Will throw if creation fails
+
+// Instance is ready to use!
+// RAII ensures proper cleanup when instance goes out of scope
+```
+
+The wrapper automatically:
+- Loads the correct plugin based on backend
+- Chains all creation parameters correctly
+- Manages interface lifetimes
+- Provides clear error messages via `std::expected`
+- Cleans up resources when destroyed
+
 ## 4.0 SETUP CALLBACK TO RECEIVE INFERRED DATA
 
 In order to receive a text response from the GPT model inference a special callback needs to be setup like this:
@@ -258,6 +363,43 @@ auto gptCallback = [](const nvigi::InferenceExecutionContext* execCtx, nvigi::In
 
 > **NOTE:**
 > To cancel GPT inference make sure to return `nvigi::InferenceExecutionStateCancel` state in the callback.
+
+### 4.1 MODERN C++ WRAPPER APPROACH
+
+The C++ wrapper simplifies callbacks with modern C++ lambdas and cleaner state management:
+
+```cpp
+using namespace nvigi::gpt;
+
+// Simple callback - just process the text
+auto result = instance->generate(
+    "You are a helpful assistant",  // system
+    "Tell me about AI",             // user
+    "",                              // assistant
+    RuntimeConfig{},                 // config (optional)
+    [](std::string_view response, ExecutionState state) -> ExecutionState {
+        // Callback receives text and state
+        std::cout << response;  // Print each token as it arrives
+        
+        // Cancel if needed
+        if (should_cancel) {
+            return ExecutionState::Cancel;
+        }
+        
+        return state;  // Continue with current state
+    }
+);
+
+if (!result) {
+    std::cerr << "Error: " << result.error().what() << "\n";
+}
+```
+
+The wrapper provides:
+- Cleaner lambda syntax with `std::string_view`
+- Enum-based state management (`ExecutionState::Done`, `ExecutionState::Cancel`)
+- `std::expected` for error handling
+- No manual memory management needed
 
 ## 5.0 PREPARE THE EXECUTION CONTEXT
 
@@ -521,6 +663,300 @@ By combining these parameters, you can ensure that token generation is throttled
 
 > **NOTE**: The token generation limiter is particularly useful in interactive or streaming scenarios where maintaining a consistent response rate is critical.
 
+### 6.3.1 MODERN C++ WRAPPER APPROACH - CHAT API
+
+The C++ wrapper provides a high-level `Chat` API that manages conversation state automatically:
+
+```cpp
+using namespace nvigi::gpt;
+
+// Create a chat session with configuration
+auto chat = instance->create_chat(
+    RuntimeConfig{}
+        .set_tokens(256)
+        .set_temperature(0.3f)
+        .set_top_p(0.8f)
+        .set_interactive(true)
+        .set_reverse_prompt("\nAssistant:")
+);
+
+// Send system message to setup conversation
+chat.send_message(
+    { .role = Instance::Chat::Message::Role::System,
+      .content = "You are a helpful AI assistant."
+    },
+    [](std::string_view response, ExecutionState state) -> ExecutionState {
+        std::cout << response;
+        return state;
+    }
+);
+
+// Interactive loop
+std::string user_input;
+while (true) {
+    std::cout << "\nUser> ";
+    std::getline(std::cin, user_input);
+    
+    if (user_input == "quit") break;
+    
+    // Send user message (blocking)
+    chat.send_message(
+        { .role = Instance::Chat::Message::Role::User,
+          .content = user_input
+        },
+        [](std::string_view response, ExecutionState state) -> ExecutionState {
+            std::cout << response;
+            return state;
+        }
+    );
+}
+
+// Access conversation history
+for (const auto& msg : chat.history()) {
+    std::cout << "Role: " << (int)msg.role << " Content: " << msg.content << "\n";
+}
+```
+
+**Polling-Based Async Chat (Perfect for Game Loops!):**
+
+```cpp
+// Start async operation (non-blocking!)
+auto op = chat.send_message_polled(
+    { .role = Instance::Chat::Message::Role::User,
+      .content = "Tell me about AI"
+    }
+).value();
+
+// Game loop integration
+bool game_running = true;
+while (game_running) {
+    // Poll for tokens (non-blocking - returns immediately!)
+    if (auto result = op.try_get_results()) {
+        std::cout << result->tokens;  // Display new tokens
+        
+        if (result->state == ExecutionState::Done) {
+            std::cout << "\n[Inference complete]\n";
+        }
+    }
+    
+    // Check if done
+    if (op.is_complete()) {
+        chat.finalize_async_response(op);
+        break;
+    }
+    
+    // Game continues running smoothly
+    render_frame();      // Renders every frame at 60 FPS
+    update_physics();    // Physics keeps running
+    process_input();     // Player can still move
+    
+    // Optional: Cancel on user input
+    if (user_pressed_cancel()) {
+        op.cancel();
+    }
+}
+```
+
+**Token Generation Rate Limiting:**
+
+```cpp
+auto chat = instance->create_chat(
+    RuntimeConfig{}
+        .set_target_tokens_per_second(10)  // Limit to 10 tokens/sec
+        .set_frame_time_ms(16.0f)           // Frame time for 60 FPS
+);
+```
+
+**LoRA Support:**
+
+```cpp
+auto chat = instance->create_chat(
+    RuntimeConfig{}
+        .add_lora("mylora1", 1.0f)    // Full strength
+        .add_lora("mylora2", 0.5f)    // Half strength
+);
+```
+
+The Chat API automatically:
+- Manages conversation history
+- Handles message role formatting
+- Provides blocking and non-blocking modes
+- Supports token-by-token streaming
+- Enables easy cancellation
+
+### 6.4 ASYNC EVALUATION AND RESULT POLLING
+
+When using `evaluateAsync`, you can poll for results instead of using a callback. This approach is useful in scenarios where you want more control over when to process the inference results, or when you need to integrate with an existing polling-based architecture.
+
+Here's how to use the polling mechanism:
+
+```cpp
+// Start async evaluation without a callback
+gptContext.callback = nullptr;
+if (NVIGI_FAILED(res, gptContext.instance->evaluateAsync(gptContext))) {
+    LOG("NVIGI async evaluation failed, code %d", res);
+    return;
+}
+
+// Poll for results
+while (true) {
+    nvigi::InferenceExecutionState state;
+    
+    // Get current results - pass true to wait for new data, false to check immediately
+    if (NVIGI_FAILED(res, gptInstance->getResults(&gptContext, true, &state))) {
+        LOG("Failed to get results, code %d", res);
+        break;
+    }
+
+    // Process the current state
+    switch (state) {
+        case nvigi::kInferenceExecutionStateDone:
+            // All data has been processed
+            gptInstance->releaseResults(&gptContext, state);
+            return;
+
+        case nvigi::kInferenceExecutionStateDataPending:
+            // New data is available
+            const nvigi::InferenceDataText* output;
+            if (gptContext.outputs && 
+                gptContext.outputs->findAndValidateSlot(kGPTDataSlotResponse, &output)) {
+                // Process the output text
+                std::string response = output->getUTF8Text();
+                // ... handle the response ...
+            }
+            
+            // Release current results to get next batch
+            gptInstance->releaseResults(&gptContext, state);
+            break;
+
+        case nvigi::kInferenceExecutionStateInvalid:
+            // Handle error state
+            LOG("Inference failed");
+            gptInstance->releaseResults(&gptContext, state);
+            return;
+    }
+}
+```
+
+### 6.5 CANCELLING ASYNC EVALUATION
+
+When using `evaluateAsync`, you can cancel an ongoing inference operation early using the `cancelAsyncEvaluation` API. This is useful when you need to interrupt generation due to user actions (e.g., pressing ESC), timeouts, or changing contexts.
+
+The cancellation mechanism is designed to interrupt the generation loop as early as possible, including during GPU/CPU work, token processing, and other internal loops.
+
+Here's how to cancel an async evaluation:
+
+```cpp
+// Start async evaluation
+gptContext.callback = nullptr;
+if (NVIGI_FAILED(res, gptContext.instance->evaluateAsync(gptContext))) {
+    LOG("NVIGI async evaluation failed, code %d", res);
+    return;
+}
+
+// ... some time later, user decides to cancel ...
+
+// Cancel the ongoing async evaluation
+if (NVIGI_FAILED(res, gptInstance->cancelAsyncEvaluation(&gptContext))) {
+    if (res == kResultNoImplementation) {
+        LOG("No async evaluation is currently running");
+    } else {
+        LOG("Failed to cancel evaluation, code %d", res);
+    }
+}
+
+// The generation will stop as soon as possible
+// Continue polling to clean up
+nvigi::InferenceExecutionState state;
+while (true) {
+    if (NVIGI_FAILED(res, gptInstance->getResults(&gptContext, false, &state))) {
+        break;
+    }
+    
+    // Release any remaining results
+    gptInstance->releaseResults(&gptContext, state);
+    
+    if (state == nvigi::kInferenceExecutionStateDone || 
+        state == nvigi::kInferenceExecutionStateInvalid) {
+        break;
+    }
+}
+```
+
+#### Important Notes:
+
+- **`cancelAsyncEvaluation` returns `kResultNoImplementation`** if no async job is running (i.e., `evaluateAsync` was not called or the job has already completed)
+- The cancellation is **thread-safe** and can be called from any thread
+- After calling `cancelAsyncEvaluation`, continue polling with `getResults` to properly clean up any remaining resources
+- The generation loop checks for cancellation at **multiple strategic points**:
+  - At the start of each generation iteration
+  - After GPU/CPU evaluation work
+  - Inside batch processing loops
+  - During token display and callback execution
+  - During session token matching
+  - During image marker processing (for VLM models)
+- Cancellation is designed to be **as fast as possible**, typically interrupting within a few milliseconds
+
+#### Example: User-Initiated Cancellation
+
+```cpp
+// Track async state
+std::atomic<bool> userRequestedCancel = false;
+std::thread asyncThread;
+
+// Start async generation
+gptContext.callback = nullptr;
+if (NVIGI_FAILED(res, gptContext.instance->evaluateAsync(gptContext))) {
+    LOG("Failed to start async evaluation");
+    return;
+}
+
+// Spawn a thread to handle user input
+asyncThread = std::thread([&]() {
+    while (true) {
+        if (checkUserPressedEscape()) {
+            userRequestedCancel = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+});
+
+// Poll for results
+nvigi::InferenceExecutionState state;
+while (true) {
+    // Check if user wants to cancel
+    if (userRequestedCancel) {
+        gptInstance->cancelAsyncEvaluation(&gptContext);
+        LOG("User cancelled generation");
+    }
+    
+    if (NVIGI_FAILED(res, gptInstance->getResults(&gptContext, true, &state))) {
+        break;
+    }
+    
+    // Process results...
+    if (gptContext.outputs) {
+        const nvigi::InferenceDataText* output;
+        if (gptContext.outputs->findAndValidateSlot(kGPTDataSlotResponse, &output)) {
+            std::string response = output->getUTF8Text();
+            displayPartialResponse(response);
+        }
+    }
+    
+    gptInstance->releaseResults(&gptContext, state);
+    
+    if (state == nvigi::kInferenceExecutionStateDone || 
+        state == nvigi::kInferenceExecutionStateInvalid) {
+        break;
+    }
+}
+
+asyncThread.join();
+```
+
+> **NOTE**: Cancellation via `cancelAsyncEvaluation` is only available for async evaluation started with `evaluateAsync`. For synchronous evaluation, use the callback return value mechanism (return `kInferenceExecutionStateCancel` from the callback) as described in section 4.0.
+
 ## 7.0 DESTROY INSTANCE(S)
 
 Once GPT is no longer needed each instance should be destroyed like this:
@@ -552,6 +988,42 @@ if(NVIGI_FAILED(result, nvigiUnloadInterface(nvigi::plugin::gpt::ggml::cuda::kId
     //! Check error
 } 
 ```
+
+### 8.1 MODERN C++ WRAPPER APPROACH
+
+Interface unloading is handled automatically by the wrapper:
+
+```cpp
+{
+    // Initialize core
+    nvigi::Core core({ .sdkPath = "path/to/sdk" });
+    
+    // Create instance
+    auto instance = Instance::create(
+        ModelConfig{ /* ... */ },
+        d3d12_config,
+        vk_config,
+        cloud_config,
+        core.loadInterface(),
+        core.unloadInterface()
+    ).value();
+    
+    // Use instance...
+    auto chat = instance->create_chat();
+    chat.send_message(/* ... */);
+    
+    // Automatic cleanup when leaving scope!
+    // 1. instance destructor -> calls destroyInstance() and unloads interfaces
+    // 2. core destructor -> calls nvigiShutdown()
+}
+// All resources cleaned up automatically - no manual calls needed!
+```
+
+**Key Benefits:**
+- No manual `nvigiUnloadInterface()` calls needed
+- Exception-safe: cleanup happens even if exceptions are thrown
+- Reference counting ensures interfaces stay valid while in use
+- Impossible to forget cleanup or get order wrong
 
 ## 9.0 VLM (Visual Lanuage Models)
 
@@ -609,8 +1081,6 @@ In the root json, have a "loras" key that is a list of dictionaries, with "name"
   "vram": 5280,
   "n_layers": 33,  
   "prompt_template": [...
-  ],
-  "turn_template": [...
   ],
   "model":
   {
@@ -917,6 +1387,8 @@ params.cudaFreeUserContext = &userContextValue;
 
 Here is the summary of the steps needed to setup the interactive (chat) mode:
 
+#### Using Callback Approach:
+
 1) Provide `nvigi::GPTRuntimeParameters` in the execution context and set `interactive` flag to TRUE
 2) Setup the conversation context by providing `nvigi::kGPTDataSlotSystem` input slot
 3) Wait until callback returns `nvigi::kInferenceExecutionStateDone`
@@ -924,6 +1396,23 @@ Here is the summary of the steps needed to setup the interactive (chat) mode:
 5) Wait until callback returns `nvigi::kInferenceExecutionStateDone` and full response is provided by the plugin
 6) Inform user about the response
 7) To continue conversation go back to the step #4
-8) To start a new conversation, go to the step #2 and setup new conversation context
+8) To start a new conversation, go to the step #2
+
+#### Using Polling Approach:
+
+1) Provide `nvigi::GPTRuntimeParameters` in the execution context and set `interactive` flag to TRUE
+2) Set callback to nullptr in execution context
+3) Setup the conversation context by providing `nvigi::kGPTDataSlotSystem` input slot
+4) Call `evaluateAsync` and poll results using `getResults` until state is `kInferenceExecutionStateDone`
+5) Release results using `releaseResults`
+6) Get user's input and take turn in the conversation by providing `nvigi::kGPTDataSlotUser` input slot
+7) Call `evaluateAsync` and poll results using `getResults`:
+   - Process response text when state is `kInferenceExecutionStateDataPending`
+   - Continue polling until state is `kInferenceExecutionStateDone`
+   - **Optional**: Call `cancelAsyncEvaluation` to interrupt generation early if needed
+8) Release results using `releaseResults`
+9) Inform user about the complete response
+10) To continue conversation go back to step #6
+11) To start a new conversation, go back to step #3
 
 > NOTE: When changing models there is no need to change any of the setup above, only model GUID would be different when creating GPT instance

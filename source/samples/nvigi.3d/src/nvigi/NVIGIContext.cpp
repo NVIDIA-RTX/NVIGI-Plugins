@@ -635,7 +635,12 @@ bool NVIGIContext::Initialize_preDeviceManager(nvrhi::GraphicsAPI api, int argc,
     };
 
     AddTTSPlugin(nvigi::plugin::tts::asqflow_trt::kId, "asqflow-trt", m_shippedModelsPath);
-    if (m_api == nvrhi::GraphicsAPI::VULKAN)
+    if (m_api == nvrhi::GraphicsAPI::D3D12)
+    {
+        m_tts.m_choices.m_gpuFeatureID = nvigi::plugin::tts::asqflow_ggml::d3d12::kId;
+        AddTTSPlugin(nvigi::plugin::tts::asqflow_ggml::d3d12::kId, "asqflow-ggml-d3d12", m_shippedModelsPath);
+    }
+    else if (m_api == nvrhi::GraphicsAPI::VULKAN)
     {
         m_tts.m_choices.m_gpuFeatureID = nvigi::plugin::tts::asqflow_ggml::vulkan::kId;
         AddTTSPlugin(nvigi::plugin::tts::asqflow_ggml::vulkan::kId, "asqflow-ggml-vk", m_shippedModelsPath);
@@ -1450,6 +1455,10 @@ void NVIGIContext::LaunchGPT(std::string prompt)
                         {
                             {
                                 std::scoped_lock lock(nvigi.m_mtx);
+                                // Edit string to remove the most common tags that may appear in the output
+                                str = std::regex_replace(str, std::regex("</?THINK>", std::regex::icase), "");
+                                str = std::regex_replace(str, std::regex("</?USER>", std::regex::icase), "");
+                                str = std::regex_replace(str, std::regex("</?AGENT>", std::regex::icase), "");
                                 messages.back().text.append(str);
                             }
                             nvigi.AppendTTSText(str, state == nvigi::kInferenceExecutionStateDone);
@@ -1707,7 +1716,8 @@ bool NVIGIContext::ModelsComboBox(const std::string& label, bool automatic, Stag
     {
         int newVram = (int)stage.m_vramBudget;
 
-        const std::string uniqueLabel = "VRAM MB ##" + label;
+        const std::string uniqueLabel = "MB ##" + label;
+        ImGui::Text("VRAM Budget");
         if (ImGui::InputInt(uniqueLabel.c_str(), &newVram, 100, 500, ImGuiInputTextFlags_EnterReturnsTrue))
         {
             if (newVram < 0)
@@ -1717,6 +1727,7 @@ bool NVIGIContext::ModelsComboBox(const std::string& label, bool automatic, Stag
             stage.m_vramBudget = newVram;
         }
 
+        ImGui::Text("Model Name");
         PluginModelInfo* newInfo = nullptr;
         if (ImGui::BeginCombo(label.c_str(), (value == nullptr) ? "No Selection" : value->m_modelName.c_str()))
         {
@@ -1760,6 +1771,7 @@ bool NVIGIContext::ModelsComboBox(const std::string& label, bool automatic, Stag
     }
     else
     {
+        ImGui::Text("Model Name (with Backend)");
         if (ImGui::BeginCombo(label.c_str(), (info == nullptr) ? "No Selection" : info->m_caption.c_str()))
         {
             if (ImGui::Selectable("No Selection", (info == nullptr)))
@@ -1888,108 +1900,131 @@ bool NVIGIContext::SelectAutoPlugin(const StageInfo& stage, const std::vector<Pl
     return false;
 }
 
-bool NVIGIContext::BuildModelsSelectUI()
+bool NVIGIContext::BuildOptionsUI()
 {
     bool isOpen = false;
-    if (ImGui::CollapsingHeader("App Settings..."))
-    {
-		const static std::map<std::string, uint32_t> schedulingModes = {
-			{ "Prioritize Graphics", (uint32_t)nvigi::SchedulingMode::kPrioritizeGraphics },
-			{ "Prioritize Inference", (uint32_t)nvigi::SchedulingMode::kPrioritizeCompute },
-			{ "Balanced", (uint32_t)nvigi::SchedulingMode::kBalance}
-		};
-        std::string value = "Not Selected";
-        for (auto& iter : schedulingModes)
-            if (iter.second == m_schedulingMode)
-			{
-				value = iter.first;
-				break;
-			}
 
-        if (ImGui::BeginCombo("Scheduling Mode", value.c_str()))
-        {
-            for (auto m : schedulingModes)
-            {
-                bool is_selected = m_schedulingMode == m.second;
-                if (ImGui::Selectable(m.first.c_str(), &is_selected) || is_selected)
-                {
-                    m_schedulingMode = m.second;
-                }
-            }
-            ImGui::EndCombo();
-        }
-        ImGui::Checkbox("Frame Rate Limiter", &m_framerateLimiting);
-        if (m_framerateLimiting)
-        {
-            ImGui::Separator();
-            const int maxFPS = 300;
-            if (ImGui::InputInt("Target FPS", &m_targetFramerate, 1, maxFPS, ImGuiInputTextFlags_EnterReturnsTrue))
-            {
-                if (m_targetFramerate < 1)
-                    m_targetFramerate = 1;
-                if (m_targetFramerate > maxFPS)
-                    m_targetFramerate = maxFPS;
-            }
-        }
-        isOpen = true;
+    if (ImGui::Button("Options..."))
+    {
+        ImGui::OpenPopup("OptionsPopup");
     }
-    if (ImGui::CollapsingHeader("Model Settings..."))
+    if (ImGui::BeginPopup("OptionsPopup"))
     {
-        ImGui::Checkbox("Automatic Backend Selection", &m_automaticBackendSelection);
-        ImGui::Separator();
+        ImGui::BeginChild("PopupContent", ImVec2(350, 250), false);
+        isOpen = true;
+        if (ImGui::BeginTabBar("Settings..."))
         {
-            ImGui::BeginDisabled(m_recording || m_asr.m_running);
-            ImGui::PushStyleColor(ImGuiCol_Text, TITLE_COL);
-            ImGui::Text("Automatic Speech Recognition");
-            ImGui::PopStyleColor();
-
-            PluginModelInfo* newInfo = m_asr.m_info;
-            if (ModelsComboBox("##ASR", m_automaticBackendSelection, m_asr, newInfo))
-                ReloadASRModel(newInfo);
-            ImGui::EndDisabled();
-        }
-
-        ImGui::Separator();
-        {
-            ImGui::BeginDisabled(m_gpt.m_running);
-            ImGui::PushStyleColor(ImGuiCol_Text, TITLE_COL);
-            ImGui::Text("GPT");
-            ImGui::PopStyleColor();
-
-            PluginModelInfo* newInfo = m_gpt.m_info;
-            if (ModelsComboBox("##GPT", m_automaticBackendSelection, m_gpt, newInfo))
-                ReloadGPTModel(newInfo);
-            ImGui::EndDisabled();
-        }
-        ImGui::Separator();
-        {
-            ImGui::BeginDisabled(m_tts.m_running);
-            ImGui::PushStyleColor(ImGuiCol_Text, TITLE_COL);
-            ImGui::Text("TTS");
-            ImGui::PopStyleColor();
-
-            PluginModelInfo* newInfo = m_tts.m_info;
-            if (ModelsComboBox("##TTS", m_automaticBackendSelection, m_tts, newInfo))
-                ReloadTTSModel(newInfo);
-
-            // Add comboBox for target voices files
-            std::vector<std::string> targetVoices = GetPossibleTargetVoices(GetNVIGICoreDllPath());
-            if (ImGui::BeginCombo("##TargetVoices", m_ttsInferenceCtx.m_selectedTargetVoice.empty() ? "Select a target voice" : m_ttsInferenceCtx.m_selectedTargetVoice.c_str())) {
-                for (const auto& file : targetVoices) {
-                    bool isSelected = (m_ttsInferenceCtx.m_selectedTargetVoice == file);
-                    if (ImGui::Selectable(file.c_str(), isSelected)) {
-                        m_ttsInferenceCtx.m_selectedTargetVoice = file;
+            if (ImGui::BeginTabItem("App"))
+            {
+                const static std::map<std::string, uint32_t> schedulingModes = {
+                    { "Prioritize Graphics", (uint32_t)nvigi::SchedulingMode::kPrioritizeGraphics },
+                    { "Prioritize Inference", (uint32_t)nvigi::SchedulingMode::kPrioritizeCompute },
+                    { "Balanced", (uint32_t)nvigi::SchedulingMode::kBalance}
+                };
+                std::string value = "Not Selected";
+                for (auto& iter : schedulingModes)
+                    if (iter.second == m_schedulingMode)
+                    {
+                        value = iter.first;
+                        break;
                     }
-                    if (isSelected) {
-                        ImGui::SetItemDefaultFocus();
+
+                ImGui::Text("GPU Scheduling Priority");
+                if (ImGui::BeginCombo("Mode", value.c_str()))
+                {
+                    for (auto m : schedulingModes)
+                    {
+                        bool is_selected = m_schedulingMode == m.second;
+                        if (ImGui::Selectable(m.first.c_str(), &is_selected) || is_selected)
+                        {
+                            m_schedulingMode = m.second;
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::Checkbox("Frame Rate Limiter", &m_framerateLimiting);
+                if (m_framerateLimiting)
+                {
+                    ImGui::Separator();
+                    const int maxFPS = 300;
+                    if (ImGui::InputInt("Target FPS", &m_targetFramerate, 1, maxFPS, ImGuiInputTextFlags_EnterReturnsTrue))
+                    {
+                        if (m_targetFramerate < 1)
+                            m_targetFramerate = 1;
+                        if (m_targetFramerate > maxFPS)
+                            m_targetFramerate = maxFPS;
                     }
                 }
-                ImGui::EndCombo();
+                ImGui::EndTabItem();
             }
-            ImGui::EndDisabled();
-        }
+            if (ImGui::BeginTabItem("ASR"))
+            {
+                ImGui::BeginDisabled(m_recording || m_asr.m_running);
+                ImGui::PushStyleColor(ImGuiCol_Text, TITLE_COL);
+                ImGui::Text("Automatic Speech Recognition");
+                ImGui::PopStyleColor();
 
-        isOpen = true;
+                ImGui::Checkbox("Automatic Backend Selection", &m_asr.m_automaticBackendSelection);
+                {
+                    PluginModelInfo* newInfo = m_asr.m_info;
+                    if (ModelsComboBox("##ASR", m_asr.m_automaticBackendSelection, m_asr, newInfo))
+                        ReloadASRModel(newInfo);
+                    ImGui::EndDisabled();
+                }
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("GPT"))
+            {
+                ImGui::BeginDisabled(m_gpt.m_running);
+                ImGui::PushStyleColor(ImGuiCol_Text, TITLE_COL);
+                ImGui::Text("GPT");
+                ImGui::PopStyleColor();
+
+                ImGui::Checkbox("Automatic Backend Selection", &m_gpt.m_automaticBackendSelection);
+                {
+                    PluginModelInfo* newInfo = m_gpt.m_info;
+                    if (ModelsComboBox("##GPT", m_gpt.m_automaticBackendSelection, m_gpt, newInfo))
+                        ReloadGPTModel(newInfo);
+                    ImGui::EndDisabled();
+                }
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("TTS"))
+            {
+                ImGui::BeginDisabled(m_tts.m_running);
+                ImGui::PushStyleColor(ImGuiCol_Text, TITLE_COL);
+                ImGui::Text("TTS");
+                ImGui::PopStyleColor();
+
+                ImGui::Checkbox("Automatic Backend Selection", &m_tts.m_automaticBackendSelection);
+                {
+                    PluginModelInfo* newInfo = m_tts.m_info;
+                    if (ModelsComboBox("##TTS", m_tts.m_automaticBackendSelection, m_tts, newInfo))
+                        ReloadTTSModel(newInfo);
+
+                    // Add comboBox for target voices files
+                    ImGui::Text("Voice Name");
+                    std::vector<std::string> targetVoices = GetPossibleTargetVoices(GetNVIGICoreDllPath());
+                    if (ImGui::BeginCombo("##TargetVoices", m_ttsInferenceCtx.m_selectedTargetVoice.empty() ? "Select a target voice" : m_ttsInferenceCtx.m_selectedTargetVoice.c_str())) {
+                        for (const auto& file : targetVoices) {
+                            bool isSelected = (m_ttsInferenceCtx.m_selectedTargetVoice == file);
+                            if (ImGui::Selectable(file.c_str(), isSelected)) {
+                                m_ttsInferenceCtx.m_selectedTargetVoice = file;
+                            }
+                            if (isSelected) {
+                                ImGui::SetItemDefaultFocus();
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::EndDisabled();
+                }
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
+        }
+		ImGui::EndChild();
+        ImGui::EndPopup();
     }
     return isOpen;
 }
@@ -2075,7 +2110,7 @@ void NVIGIContext::BuildChatUI()
         static size_t lastMsgCount = 0;
 
         // Shorten text box if settings are visible
-        auto child_size = ImVec2(ImGui::GetContentRegionAvail().x, m_modelSettingsOpen ? 300 : 800);
+        auto child_size = ImVec2(ImGui::GetContentRegionAvail().x, 800);
         if (ImGui::BeginChild("Chat UI", child_size, false))
         {
             if (m_gpt.m_ready || m_asr.m_ready || m_tts.m_ready)
@@ -2231,7 +2266,7 @@ void NVIGIContext::BuildUI()
     }
 
     BuildModelsStatusUI();
-    m_modelSettingsOpen = BuildModelsSelectUI();
+    BuildOptionsUI();
     BuildChatUI();
 }
 

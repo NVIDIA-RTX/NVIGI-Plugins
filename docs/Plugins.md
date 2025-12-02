@@ -1,6 +1,14 @@
 # NVIDIA In-Game Inference AI Plugins
 
-In-Game Inferencing (NVIGI) is an open-sourced cross platform solution that simplifies integration of the latest NVIDIA and other provider's technologies into applications and games. This framework allows developers to easily implement one single integration and enable multiple technologies supported by the hardware vendor or cloud provider. Supported technologies include AI inference but, due to the generic nature of the NVIGI SDK, can be expanded to graphics or any other field of interest.
+## Abstract
+
+This document explains the organization and setup process for the NVIGI AI plugins included in this release pack. After reading you should be able to:
+- Understand the organization of the files and directories that make up the plugins in this pack
+- Set up a development environment for building the included AI plugins from source (as part of learning the basics of how to use NVIGI)
+
+## Introduction
+
+In-Game Inferencing (NVIGI) is an open-sourced cross-platform solution that simplifies integration of the latest NVIDIA and other provider's technologies into applications and games. This framework allows developers to easily implement one single integration and enable multiple technologies supported by the hardware vendor or cloud provider. Supported technologies include AI inference but, due to the generic nature of the NVIGI SDK, can be expanded to graphics or any other field of interest.
 
 For high-level details of NVIGI, as well as links to the official downloads for the product, see [NVIDIA In-Game Inferencing](https://developer.nvidia.com/rtx/in-game-inferencing)
 
@@ -11,17 +19,15 @@ This directory contains the main AI plugins for integrating In-Game Inferencing-
 
 ## Prerequisites
 
-### Hardware
-
-- NVIDIA RTX 30x0/A6000 series or (preferably) RTX 4080/4090 or RTX 5080/5090 with a minimum of 8GB and recommendation of 12GB VRAM.  
+| NVIGI version 1.4.0 | Minimum | Recommended |
+|:--------------------|:--------|:------------|
+|GPU|RTX 30x0/A600|RTX 4080/4090 or RTX 5080/5090|
+|VRAM|8GB|12GB|
+|Windows|Win10 20H1 (version 2004 - 10.0.19041)||
+|Graphics Driver|r555.85||
+|Development Tools|VS Code or VS2019/VS2022 with [SDK 10.0.19041+](https://go.microsoft.com/fwlink/?linkid=2120843)||
 
 > NOTE: Some plugins only support RTX 40x0 and above, and will not be available on RTX 30x0.
-
-### Windows
-
-- Win10 20H1 (version 2004 - 10.0.19041) or newer
-- Install graphics driver r555.85 or newer
-- Install VS Code or VS2019/VS2022 with [SDK 10.0.19041+](https://go.microsoft.com/fwlink/?linkid=2120843)
 
 ### NVIGI Components
 
@@ -38,7 +44,7 @@ These packs can be found either as:
 
 NVIGI core is documented in detail in its own documentation, which should be available in any distribution.  Developers should read the documentation in `nvigi_core` to gain a basic understanding of the overall architecture into which the plugins in this source tree plug into.
 
-## DIRECTORY SETUP
+## Directory Setup
 
 As noted, building the NVIGI plugins SDK from source requires access to a fully-built local copy of the NVIGI Core PDK.  We will call the location of this PDK `<NVIGI_CORE>`.
 
@@ -66,14 +72,12 @@ This directory junction link can be done easily by running the following command
 `mklink /j nvigi_core <NVIGI_CORE>` 
 
 ## Basic Steps: Summary
+> NOTE:
+> This section is meant to be a quick, dive-in list of succinct steps to get started with building the included NVIGI AI plugins from source. The next section of this document goes over the same steps in more detail and also provides some troubleshooting information.
 
-The following sections detail each of the steps of how to set up, rebuild and run the samples in this pack from the debugger or command line.  But the basic steps are:
 1. Generate the project files
    1. Open a VS2022 Development Command Prompt to the SDK (a.k.a. `<SDK_PLUGINS>`) directory
    2. Run `setup.bat`
-> NOTE:
-> If `setup.bat` fails with an error from the `packman` package downloader, please re-run `setup.bat` again as there are rare but possible issues with link-creation on initial run.
-
 2. Build the project, which will build the plugins and samples from source
    1. Launch VS2022
    2. Load `<SDK_PLUGINS>/_project/vs2022/nvigi.sln` as the workspace
@@ -85,10 +89,12 @@ The following sections detail each of the steps of how to set up, rebuild and ru
    1. Open a (or use an existing) VS2022 Development Command Prompt to the SDK (a.k.a. `<SDK_PLUGINS>`) directory
    2. Run `bin\x64\nvigi.basic.exe --models data\nvigi.models`
 
-## Setup 
+## Basic Steps: Detailed Breakdown
+
+### Setup 
 
 > **IMPORTANT:** 
-> As detailed in [an earlier section](#required-connection-from-the-sdk-to-the-core-pdk), there must be either:
+> As detailed in [an earlier section](#required-connection-from-the-sdk-to-the-core), there must be either:
 > * An instance of the NVIGI Core SDK located at `<SDK_PLUGINS>/nvigi_core` (which is the default for some NVIGI SDK packs), or
 > * A directory junction link from `<SDK_PLUGINS>/nvigi_core` to your built and packaged copy of the NVIGI Core PDK, `<NVIGI_CORE>`.
 
@@ -109,7 +115,7 @@ When you run the `setup.bat` script, the script will cause two things to be done
 > NOTE:
 > If `setup.bat` fails with an error from the `packman` package downloader, please re-run `setup.bat` again as there are rare but possible issues with link-creation on initial run.
 
-## Building
+### Building
 
 To build the project, simply open `_project\vs20XX\nvigi.sln` in Visual Studio, select the desired build configuration and build.
 
@@ -118,7 +124,7 @@ run the setup and build scripts as described here above. That's it. The specific
 are all runtime dependencies, not compile/link time dependencies. This allows NVIGI to build on stock
 virtual machines that require zero configuration.
 
-## "Installing" Built Binaries
+### "Installing" Built Binaries
 
 Once you build your own binaries, either the SDK DLLs or the Sample executable, those will reside in `_artifacts`, not `bin\x64`.  After building any configuration (Release, Debug, etc), you will need to run the `copy_sdk_binaries.bat <cfg>` script.  If you build the Release config, this would be:
 
@@ -127,11 +133,11 @@ Once you build your own binaries, either the SDK DLLs or the Sample executable, 
 
 This will copy the core lib, the DLLs and the exes to `bin\x64` and should be done before trying the next section.
 
-## Samples
+### Samples
 
 Setting up and running the samples as shipped pre-built or built using the instructions above is discussed in detail in [Samples](docs/Samples.md)
 
-## Changing an Existing Project
+### Changing an Existing Project
 
 > IMPORTANT: Do not edit the MSVC project files directly!  Always modify the `premake.lua` or files in `premake`.
 
@@ -141,6 +147,7 @@ When changing an existing project's settings or contents (ie: adding a new sourc
 
 ## Programming Guides 
 
+For specific instructions and details on specific NVIGI AI plugins, please see the following guides:
 - [Automatic Speech Recognition](ProgrammingGuideASRWhisper.md)
 - [Embedding](ProgrammingGuideEmbed.md)
 - [Generative Pre-Trained Transformer](ProgrammingGuideGPT.md)
@@ -148,7 +155,7 @@ When changing an existing project's settings or contents (ie: adding a new sourc
 
 ## Sample App and Source
 
-A 3D-rendered sample application using In-Game Inferencing may be found in most SDK packs.  If the pack is in standard layout, this will be in a sibling directory of `sdk` called `sample`.  There is a `README` in that directory with detailed instructions.
+A 3D-rendered sample application using In-Game Inferencing may be found in most SDK packs; please see [its documentation](Samples3D.md) for more details on how to use it to test NVIDIA In-Game Inference AI Plugins.
 
 ## Release Notes:
 

@@ -1,10 +1,6 @@
 group "plugins/networking"
 
 	project "nvigi.plugin.net"
-		kind "SharedLib"	
-		targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
-		objdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}") 
-		
 		pluginBasicSetup("net")
 	
 		files {

@@ -15,6 +15,7 @@
 #include <functional>
 #include <future>
 #include <iostream>
+#include <sstream>
 #include <regex>
 #include <thread>
 #include <format>
@@ -89,12 +90,20 @@ inline std::string getExecutablePath()
 #endif
 }
 
-void loggingCallback(nvigi::LogType type, const char* msg)
+void loggingPrint(nvigi::LogType type, const char* msg)
 {
 #ifdef NVIGI_WINDOWS
     OutputDebugStringA(msg);
 #endif
-    //std::cout << msg;
+    std::cout << msg;
+}
+
+void loggingCallback(nvigi::LogType type, const char* msg)
+{
+#ifndef NVIGI_DEBUG
+    if (type == nvigi::LogType::eError)
+#endif
+        loggingPrint(type, msg);
 }
 
 template<typename T>
@@ -110,7 +119,7 @@ bool unloadInterface(nvigi::PluginID feature, T*& _interface)
     }
     else
     {
-        loggingCallback(nvigi::LogType::eError, "Failed to unload interface");
+        loggingPrint(nvigi::LogType::eError, "Failed to unload interface");
         return false;
     }
 
@@ -132,6 +141,8 @@ struct NVIGIAppCtx
 
 int InitNVIGI(NVIGIAppCtx& nvigiCtx, const std::string& pathToSDKUtf8)
 {
+    loggingPrint(nvigi::LogType::eInfo, "Initializing NVIGI\n");
+
 #ifdef NVIGI_WINDOWS
     auto libPath = pathToSDKUtf8 + "/nvigi.core.framework.dll";
 #else
@@ -140,7 +151,7 @@ int InitNVIGI(NVIGIAppCtx& nvigiCtx, const std::string& pathToSDKUtf8)
     nvigiCtx.coreLib = LoadLibraryA(libPath.c_str());
     if (nvigiCtx.coreLib == nullptr)
     {
-        loggingCallback(nvigi::LogType::eError, "Could not load NVIGI core library");
+        loggingPrint(nvigi::LogType::eError, "Could not load NVIGI core library");
         return -1;
     }
 
@@ -152,7 +163,7 @@ int InitNVIGI(NVIGIAppCtx& nvigiCtx, const std::string& pathToSDKUtf8)
     if (ptr_nvigiInit == nullptr || ptr_nvigiShutdown == nullptr ||
         ptr_nvigiLoadInterface == nullptr || ptr_nvigiUnloadInterface == nullptr)
     {
-        loggingCallback(nvigi::LogType::eError, "Could not load NVIGI core library");
+        loggingPrint(nvigi::LogType::eError, "Could not load NVIGI core library");
         return -1;
     }
 
@@ -163,17 +174,19 @@ int InitNVIGI(NVIGIAppCtx& nvigiCtx, const std::string& pathToSDKUtf8)
 
     nvigi::Preferences pref{};
     pref.logLevel = nvigi::LogLevel::eVerbose;
-    pref.showConsole = true;
+    pref.showConsole = false;
     pref.numPathsToPlugins = 1;
     pref.utf8PathsToPlugins = paths;
-    pref.logMessageCallback = pref.showConsole ? (nvigi::PFun_LogMessageCallback*)nullptr : loggingCallback; // avoid duplicating logs in the console
+    pref.logMessageCallback = loggingCallback; // avoid duplicating logs in the console
     pref.utf8PathToLogsAndData = pathToSDKUtf8.c_str();
 
     if (NVIGI_FAILED(result, ptr_nvigiInit(pref, nullptr, nvigi::kSDKVersion)))
     {
-        loggingCallback(nvigi::LogType::eError, "NVIGI init failed");
+        loggingPrint(nvigi::LogType::eError, "NVIGI init failed");
         return -1;
     }
+
+    loggingPrint(nvigi::LogType::eInfo, "Initializing NVIGI succeeded\n");
 
     return 0;
     }
@@ -182,7 +195,7 @@ int ShutdownNVIGI(NVIGIAppCtx& nvigiCtx)
 {
     if (NVIGI_FAILED(result, ptr_nvigiShutdown()))
     {
-        loggingCallback(nvigi::LogType::eError, "Error in 'nvigiShutdown'");
+        loggingPrint(nvigi::LogType::eError, "Error in 'nvigiShutdown'");
         return -1;
     }
 
@@ -193,10 +206,12 @@ int ShutdownNVIGI(NVIGIAppCtx& nvigiCtx)
 
 int InitGPT(NVIGIAppCtx& nvigiCtx, const std::string& modelDir)
 {
+    loggingPrint(nvigi::LogType::eInfo, "Initializing GPT\n");
+
     //! GPT Interface
     if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigi::plugin::gpt::ggml::cuda::kId, &nvigiCtx.igpt, ptr_nvigiLoadInterface)))
     {
-        loggingCallback(nvigi::LogType::eError, "Could not query GPT interface");
+        loggingPrint(nvigi::LogType::eError, "Could not query GPT interface");
         return -1;
     }
 
@@ -209,7 +224,7 @@ int InitGPT(NVIGIAppCtx& nvigiCtx, const std::string& modelDir)
     gptCommon.modelGUID = "{545F7EC2-4C29-499B-8FC8-61720DF3C626}"; // Qwen3-8B-Q4_K_M
     if (NVIGI_FAILED(result, gptCommon.chain(gptParams)))
     {
-        loggingCallback(nvigi::LogType::eError, "GPT param chaining failed");
+        loggingPrint(nvigi::LogType::eError, "GPT param chaining failed");
         return -1;
     }
 
@@ -219,6 +234,8 @@ int InitGPT(NVIGIAppCtx& nvigiCtx, const std::string& modelDir)
         return -1;
 
     auto result = nvigiCtx.igpt->createInstance(gptCommon, &nvigiCtx.gptInst);
+
+    loggingPrint(nvigi::LogType::eInfo, "Initializing GPT succeeded\n");
 
     return 0;
 }
@@ -230,13 +247,13 @@ int ReleaseGPT(NVIGIAppCtx& nvigiCtx)
 
     if (NVIGI_FAILED(result, nvigiCtx.igpt->destroyInstance(nvigiCtx.gptInst)))
     {
-        loggingCallback(nvigi::LogType::eError, "Failed to destroy GPT instance");
+        loggingPrint(nvigi::LogType::eError, "Failed to destroy GPT instance");
         return -1;
     }
 
     if (!unloadInterface(nvigi::plugin::gpt::ggml::cuda::kId, nvigiCtx.igpt))
     {
-        loggingCallback(nvigi::LogType::eError, "Failed to release GPT interface");
+        loggingPrint(nvigi::LogType::eError, "Failed to release GPT interface");
         return -1;
     }
 
@@ -308,7 +325,7 @@ void GetCompletion(NVIGIAppCtx& nvigiCtx, const std::string& system_prompt, cons
 
     if (ctx.instance->evaluate(&ctx) != nvigi::kResultOk)
     {
-        loggingCallback(nvigi::LogType::eError, "GPT evaluate failed");
+        loggingPrint(nvigi::LogType::eError, "GPT evaluate failed");
     }
     // ctx is held in this scope, so we can't let it go out of scope while the LLM is evaluating.
     while (!userData.done);
@@ -522,8 +539,8 @@ public:
         {
             // Not only will the error be logged, but the AI will be informed about it as well. This may allow the AI to follow up with a proper correction
             // without needing to fail completely, and still allowing a seamless response to the user.
-            loggingCallback(nvigi::LogType::eError, "LLM sent back valid JSON, WITH correct function name, but incorrect function arguments:");
-            loggingCallback(nvigi::LogType::eError, parameters.dump().c_str());
+            loggingPrint(nvigi::LogType::eError, "LLM sent back valid JSON, WITH correct function name, but incorrect function arguments:");
+            loggingPrint(nvigi::LogType::eError, parameters.dump().c_str());
             GetCompletion(m_nvigiCtx, "", "The tool call json was malformed.  It must contain a name, arguments, and one of those arguments must be location", ai_response_to_tool_result);
             return ai_response_to_tool_result;
         }
@@ -613,7 +630,9 @@ private:
 
         if (res != CURLE_OK)
         {
-            std::cerr << "curl_easy_perform() failed: " << curl_easy_strerror(res) << std::endl;
+            std::stringstream strstr;
+            strstr << "curl_easy_perform() failed: " << curl_easy_strerror(res) << std::endl;
+            loggingPrint(nvigi::LogType::eError, strstr.str().c_str());
             return "";
         }
         else
@@ -663,7 +682,9 @@ private:
 
             if (res != CURLE_OK)
             {
-                std::cerr << "curl_easy_perform() failed: " << curl_easy_strerror(res) << std::endl;
+                std::stringstream strstr;
+                strstr << "curl_easy_perform() failed: " << curl_easy_strerror(res) << std::endl;
+                loggingPrint(nvigi::LogType::eError, strstr.str().c_str());
             }
             else
             {
@@ -683,12 +704,16 @@ private:
                 }
                 catch (std::exception e)
                 {
-                    std::cerr << e.what();
+                    std::stringstream strstr;
+                    strstr << e.what();
+                    loggingPrint(nvigi::LogType::eError, strstr.str().c_str());
                 }
             }
         }
         else {
-            std::cerr << "Failed to initialize curl." << std::endl;
+            std::stringstream strstr;
+            strstr << "Failed to initialize curl." << std::endl;
+            loggingPrint(nvigi::LogType::eError, strstr.str().c_str());
         }
 
         // clean up curl allocation.
@@ -741,8 +766,8 @@ public:
         {
             // Not only will the error be logged, but the AI will be informed about it as well. This may allow the AI to follow up with a proper correction
             // without needing to fail completely, and still allowing a seamless response to the user.
-            loggingCallback(nvigi::LogType::eError, "LLM sent back valid JSON, WITH correct function name, but incorrect function arguments:");
-            loggingCallback(nvigi::LogType::eError, parameters.dump().c_str());
+            loggingPrint(nvigi::LogType::eError, "LLM sent back valid JSON, WITH correct function name, but incorrect function arguments:");
+            loggingPrint(nvigi::LogType::eError, parameters.dump().c_str());
             GetCompletion(m_nvigiCtx, "", "The tool call json was malformed.  It must contain a name, arguments, and one of those arguments must be search_query", ai_response_to_tool_result);
             return ai_response_to_tool_result;
         }
@@ -823,15 +848,15 @@ void callTool(NVIGIAppCtx& nvigiCtx, const ToolVec& tools, const std::string& js
         }
         else
         {
-            loggingCallback(nvigi::LogType::eError, "LLM sent back valid JSON, but JSON has no 'name' keyword to indicate which function to call:");
-            loggingCallback(nvigi::LogType::eError, answer.c_str());
+            loggingPrint(nvigi::LogType::eError, "LLM sent back valid JSON, but JSON has no 'name' keyword to indicate which function to call:");
+            loggingPrint(nvigi::LogType::eError, answer.c_str());
             answer = "Unable to find tool without a name keyword";
         }
     }
     catch (const json::parse_error& e)
     {
-        loggingCallback(nvigi::LogType::eError, "JSON parse error:");
-        loggingCallback(nvigi::LogType::eError, e.what());
+        loggingPrint(nvigi::LogType::eError, "JSON parse error:");
+        loggingPrint(nvigi::LogType::eError, e.what());
         answer = "malformed json returned";
     }
 }
@@ -849,7 +874,7 @@ int main(int argc, char** argv)
 
     if (argc != 2)
     {
-        loggingCallback(nvigi::LogType::eError, "nvigi.fcall <path to models> <text file>");
+        loggingPrint(nvigi::LogType::eError, "nvigi.fcall <path to models>");
         return -1;
     }
     modelDir = argv[1];
@@ -864,7 +889,7 @@ int main(int argc, char** argv)
     //! GPT Instance
     if (InitGPT(nvigiCtx, modelDir))
     {
-        loggingCallback(nvigi::LogType::eError, "Could not create GPT instance");
+        loggingPrint(nvigi::LogType::eError, "Could not create GPT instance");
         return -1;
     }
 

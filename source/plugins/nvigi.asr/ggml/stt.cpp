@@ -13,6 +13,7 @@
 #include "source/plugins/nvigi.asr/ggml/versions.h"
 #include "source/plugins/nvigi.asr/nvigi_asr_whisper.h"
 #include "source/utils/nvigi.ai/ai.h"
+#include "source/utils/nvigi.poll/poll.h"
 #include "_artifacts/gitVersion.h"
 #include "external/json/source/nlohmann/json.hpp"
 #include "external/whisper.cpp/include/whisper.h"
@@ -66,7 +67,6 @@ namespace asr
 {
 
 constexpr StreamSignal kStreamTypeNone = (StreamSignal)-1;
-constexpr float kMaxAudioBufferSizeMs = 5 * 60 * 1000;
 constexpr int kAvailableAudioBufferSize = 0;
 
 #define NUM_BUFFERS 2
@@ -115,6 +115,7 @@ struct InferenceContext
 {
     InferenceContext(const nvigi::NVIGIParameter* params) : cudaContext(params) {}
 
+    poll::PollContext<nvigi::InferenceExecutionState> pollCtx;
 #ifndef NVIGI_ASR_GFN_NVCF
     whisper_context* model{};
 #endif
@@ -124,11 +125,10 @@ struct InferenceContext
     std::vector<float> pcmf32;
     std::vector<float> pcmf32_new;
 
-    std::vector<whisper_token> prompt_tokens;
-
     std::mutex mtx;
     std::future<Result> job;
     std::atomic<bool> running = true;
+    std::atomic<bool> cancelled = false;  // Flag to request early cancellation
 
 #if GGML_USE_CUBLAS
     // Used to set the relative priority of GPU inference and graphics
@@ -190,7 +190,8 @@ struct ASRContext
     void onDestroyContext() {};
 
     IAutoSpeechRecognition api{};
-
+    IPolledInferenceInterface polledApi{};
+    
     PluginID feature{};
 
     // Caps and requirements
@@ -207,21 +208,53 @@ struct ASRContext
 
 nvigi::Result evaluate(nvigi::InferenceExecutionContext* execCtx);
 nvigi::Result evaluateAsync(nvigi::InferenceExecutionContext* execCtx);
+nvigi::Result cancelAsyncEvaluation(nvigi::InferenceExecutionContext* execCtx);
 
 }
 
 //! Define our plugin, make sure to update version numbers in versions.h
 NVIGI_PLUGIN_DEFINE("nvigi.plugin.asr", Version(VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH), Version(API_MAJOR, API_MINOR, API_PATCH), asr, ASRContext)
 
+nvigi::Result flushAndTerminate(nvigi::asr::InferenceContext* instance)
+{
+    auto result = nvigi::kResultOk;
+    if (instance->job.valid())
+    {
+        // Release any results that are pending
+        if (instance->pollCtx.checkResultPending())
+        {
+            instance->pollCtx.releaseResults(nvigi::kInferenceExecutionStateDone);
+        }
+        
+        // Signal the async job to stop
+        instance->running.store(false);
+        
+        // Wait for the job to complete with timeout
+        auto futureResult = instance->job.wait_for(std::chrono::seconds(10));
+        if (futureResult == std::future_status::ready)
+        {
+            if (NVIGI_FAILED(result, instance->job.get()))
+            {
+                return result;
+            }
+        }
+        else
+        {
+            NVIGI_LOG_WARN("Async job timed out.");
+            return kResultTimedOut;
+        }
+    }
+    return result;
+}
+
 nvigi::Result whisperDestroyInstance(const nvigi::InferenceInstance* instance)
 {
     if (instance)
     {
         auto sttInstance = (nvigi::asr::InferenceContext*)(instance->data);
-        if (sttInstance->job.valid())
+        if (NVIGI_FAILED(result, flushAndTerminate(sttInstance)))
         {
-            sttInstance->running.store(false);
-            sttInstance->job.get();
+            return result;
         }
 
         {
@@ -342,6 +375,17 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
 
         {
 #if GGML_USE_CUBLAS
+            // Multi GPU / CIG support:
+            // ggml_backend_cuda_reg checks whether it has been called before, 
+            // and if not iterates over all CUDA devices and initializes them.
+            // For each iteration, cudart calls cuDevicePrimaryCtxRetain, which
+            // sets the context to the primary context, which is non-CIG. 
+            // To be able to support CIG we need to set the context and not have
+            // anyone else change it.
+            // So we call ggml_backend_cuda_reg here outside the 
+            // RuntimeContextScope. That way it will never be called again, and
+            // we have full control of the context inside the scope.
+            ggml_backend_reg_t cuda_reg = ggml_backend_cuda_reg();
             nvigi::RuntimeContextScope scope(*instanceData);
             cudaStream_t stream{};
             cudaError_t err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
@@ -416,14 +460,52 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
 
 #endif
             struct whisper_context_params cparams = whisper_context_default_params();
-            if (params._base.version >= kStructVersion2)
+            if (params.getVersion() >= kStructVersion2)
             {
                 cparams.flash_attn = params.flashAtt;
+            }
+            if (params.getVersion() >= kStructVersion3)
+            {
+                instanceData->params.translate = params.translate;
+                instanceData->params.detect_language = params.detectLanguage;
+                instanceData->params.length_ms = params.lengthMs;
+                instanceData->params.step_ms = params.stepMs;
+                instanceData->params.keep_ms = params.keepMs;
             }
 #if GGML_USE_CUBLAS
             cparams.use_gpu = true;
             auto cudaParams = findStruct<CudaParameters>(_params);
-            cparams.gpu_device = cudaParams ? cudaParams->device : 0;
+            auto d3dParams = findStruct<D3D12Parameters>(_params);
+            
+            // If using CIG/D3D12, the CIG context is already current (pushed by RuntimeContextScope)
+            // Query which device it's on so whisper uses the correct device
+            if (d3dParams && d3dParams->queue && instanceData->cudaContext.cudaCtx)
+            {
+                // CIG context is already current, just query which device
+                CUdevice cuDevice;
+                CUresult cuerr = cuCtxGetDevice(&cuDevice);
+                if (cuerr == CUDA_SUCCESS)
+                {
+                    cparams.gpu_device = (int)cuDevice;
+                    NVIGI_LOG_INFO("CIG context is already active on device %d, whisper will use this device", 
+                                  cparams.gpu_device);
+                }
+                else
+                {
+                    cparams.gpu_device = 0;
+                    NVIGI_LOG_WARN("Failed to query current device, defaulting to device 0");
+                }
+            }
+            else if (cudaParams)
+            {
+                cparams.gpu_device = cudaParams->device;
+                NVIGI_LOG_INFO("User specified CUDA device %d in CudaParameters struct", cparams.gpu_device);
+            }
+            else
+            {
+                cparams.gpu_device = 0;
+                NVIGI_LOG_INFO("No device specified, using default CUDA device 0");
+            }
 #endif
             try
             {
@@ -473,8 +555,7 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
 #endif
         NVIGI_LOG_VERBOSE("Created instance for backend '%s' - threads %d", platform, instanceData->params.n_threads);
 
-        // Single channel, 60 seconds of samples as floats
-        instanceData->audio.init(kMaxAudioBufferSizeMs);
+        instanceData->audio.init(instanceData->params.length_ms);
     }
     
     auto instance = new InferenceInstance();
@@ -484,6 +565,7 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
     instance->getOutputSignature = asr::getOutputSignature;
     instance->evaluate = asr::evaluate;
     instance->evaluateAsync = asr::evaluateAsync;
+    instance->cancelAsyncEvaluation = asr::cancelAsyncEvaluation;
     
     *_instance = instance;
 
@@ -541,7 +623,8 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
         return kResultInvalidParameter;
     }
 
-    if (!execCtx->callback)
+    // In async mode callback is optional since we can poll for results
+    if (!execCtx->callback && !async)
     {
         NVIGI_LOG_ERROR("ASR inference callback not provided");
         return kResultInvalidParameter;
@@ -584,7 +667,16 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
             if (cpuBuffer->buffer && cpuBuffer->sizeInBytes >= content.size())
             {
                 strcpy_s((char*)cpuBuffer->buffer, cpuBuffer->sizeInBytes, content.c_str());
-                res = execCtx->callback(execCtx, state, execCtx->callbackUserData);
+                if (execCtx->callback)
+                {
+                    res = execCtx->callback(execCtx, state, execCtx->callbackUserData);
+                }
+                else
+                {
+                    // Using polled results
+                    auto instance = (nvigi::asr::InferenceContext*)(execCtx->instance->data);
+                    res = instance->pollCtx.triggerCallback(state);
+                }
             }
         }
         else
@@ -595,7 +687,16 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
             std::vector<nvigi::InferenceDataSlot> slots = { {kASRWhisperDataSlotTranscribedText, data} };
             nvigi::InferenceDataSlotArray outputs = { slots.size(), slots.data() };
             execCtx->outputs = &outputs;
-            res = execCtx->callback(execCtx, state, execCtx->callbackUserData);
+            if (execCtx->callback)
+            {
+                res = execCtx->callback(execCtx, state, execCtx->callbackUserData);
+            }
+            else
+            {
+                // Using polled results
+                auto instance = (nvigi::asr::InferenceContext*)(execCtx->instance->data);
+                res = instance->pollCtx.triggerCallback(state);
+            }
             //! Clear outputs since these are all local variables
             execCtx->outputs = {};
         }
@@ -629,6 +730,17 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
             params.beam_size = runtime->beamSize;
         }
         params.best_of = runtime->bestOf;
+        if (runtime->getVersion() >= 2)
+        {
+            params.prompt = runtime->prompt ? runtime->prompt : "";
+            params.temperature = runtime->temperature;
+            params.entropy_thold = runtime->entropyThold;
+            params.logprob_thold = runtime->logprobThold;
+            params.suppressBlank = runtime->suppressBlank;
+            params.suppressNonSpeechTokens = runtime->suppressNonSpeechTokens;
+            params.noSpeechThold = runtime->noSpeechThold;
+            params.no_context = runtime->noContext;
+        }
     }
     StreamSignal streamType = streaming && async ? streaming->signal : kStreamTypeNone;
 
@@ -697,9 +809,18 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
 
             wparams.single_segment = async;
 
-            wparams.no_context = true;
-            wparams.prompt_tokens = wparams.no_context ? nullptr : instance->prompt_tokens.data();
-            wparams.prompt_n_tokens = wparams.no_context ? 0 : (int)instance->prompt_tokens.size();
+            wparams.translate = params.translate;
+            wparams.detect_language = params.detect_language;
+            wparams.temperature = params.temperature;
+            wparams.suppress_blank = params.suppressBlank;
+            wparams.suppress_nst = params.suppressNonSpeechTokens;
+            wparams.no_speech_thold = params.noSpeechThold;
+            wparams.logprob_thold = params.logprob_thold;
+            wparams.entropy_thold = params.entropy_thold;
+
+            // let whisper.cpp handle the prompt and tokenization
+            wparams.no_context = params.no_context;
+            wparams.initial_prompt = params.prompt.c_str();
 
             wparams.debug_mode = false;
             wparams.print_realtime = false;
@@ -755,6 +876,13 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
             const int n_segments = whisper_full_n_segments(instance->model);
             for (int i = 0; i < n_segments; ++i)
             {
+                // Check for cancellation request
+                if (instance->cancelled.load())
+                {
+                    NVIGI_LOG_VERBOSE("ASR segment processing cancelled by user request");
+                    return kResultOk;
+                }
+                
                 const char* text = whisper_full_get_segment_text(instance->model, i);
                 // NOTE: In non production we send stats later with state set to done
                 nvigi::InferenceExecutionState state = finalSegment ? nvigi::kInferenceExecutionStateDataPending : nvigi::kInferenceExecutionStateDataPartial;
@@ -804,12 +932,19 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
         if (!instance->job.valid())
         {
             instance->running.store(true);
+            instance->cancelled.store(false);  // Reset cancellation flag for new evaluation
             instance->job = std::async(std::launch::async, [instance, triggerCallback, runInference]()->Result
             {
                 auto res = kResultOk;
-                while (instance->running.load() && res == kResultOk)
+                while (instance->running.load() && !instance->cancelled.load() && res == kResultOk)
                 {
                     res = runInference();
+                }
+                // If cancelled, exit cleanly
+                if (instance->cancelled.load())
+                {
+                    NVIGI_LOG_VERBOSE("ASR evaluation cancelled by user request");
+                    return kResultOk;
                 }
                 return res;
             });
@@ -826,12 +961,19 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
                 }
                 // No errors, start new job
                 instance->running.store(true);
+                instance->cancelled.store(false);  // Reset cancellation flag for new evaluation
                 instance->job = std::async(std::launch::async, [instance, triggerCallback, runInference]()->Result
                 {
                     auto res = kResultOk;
-                    while (instance->running.load() && res == kResultOk)
+                    while (instance->running.load() && !instance->cancelled.load() && res == kResultOk)
                     {
                         res = runInference();
+                    }
+                    // If cancelled, exit cleanly
+                    if (instance->cancelled.load())
+                    {
+                        NVIGI_LOG_VERBOSE("ASR evaluation cancelled by user request");
+                        return kResultOk;
                     }
                     return res;
                 });
@@ -859,6 +1001,49 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
     return result;
 }
 
+// Add new functions for polling support:
+Result asrGetResults(InferenceExecutionContext* execCtx, bool wait, InferenceExecutionState* state) {
+    if (!execCtx || !execCtx->instance) {
+        return kResultInvalidParameter;
+    }
+
+    auto instance = static_cast<asr::InferenceContext*>(execCtx->instance->data);
+    return instance->pollCtx.getResults(wait, state);
+}
+
+Result asrReleaseResults(InferenceExecutionContext* execCtx, InferenceExecutionState state) {
+    if (!execCtx || !execCtx->instance) {
+        return kResultInvalidParameter;
+    }
+
+    auto instance = static_cast<asr::InferenceContext*>(execCtx->instance->data);
+    return instance->pollCtx.releaseResults(state);
+}
+
+Result asrCancelAsyncEvaluation(InferenceExecutionContext* execCtx) {
+    if (!execCtx || !execCtx->instance) {
+        return kResultInvalidParameter;
+    }
+
+    auto instance = static_cast<asr::InferenceContext*>(execCtx->instance->data);
+    
+    // Check if async job is actually running
+    if (!instance->job.valid())
+    {
+        NVIGI_LOG_WARN("cancelAsyncEvaluation called but no async evaluation is running");
+        return kResultNoImplementation;
+    }
+    
+    // Set cancellation flag to interrupt the evaluation loop as early as possible
+    instance->cancelled.store(true);
+    
+    if (NVIGI_FAILED(result, flushAndTerminate(instance)))
+    {
+        return result;
+    }
+    return kResultOk;
+}
+
 //! Exception handling wrappers
 //! 
 //! Note that we export these via our interface
@@ -884,6 +1069,18 @@ nvigi::Result evaluate(nvigi::InferenceExecutionContext* execCtx)
 nvigi::Result evaluateAsync(nvigi::InferenceExecutionContext* execCtx)
 {
     NVIGI_CATCH_EXCEPTION(whisperEvaluate(execCtx, true));
+}
+nvigi::Result getResults(nvigi::InferenceExecutionContext* execCtx, bool wait, nvigi::InferenceExecutionState* state)
+{
+    NVIGI_CATCH_EXCEPTION(asrGetResults(execCtx, wait, state));
+}
+nvigi::Result releaseResults(nvigi::InferenceExecutionContext* execCtx, nvigi::InferenceExecutionState state)
+{
+    NVIGI_CATCH_EXCEPTION(asrReleaseResults(execCtx, state));
+}
+nvigi::Result cancelAsyncEvaluation(nvigi::InferenceExecutionContext* execCtx)
+{
+    NVIGI_CATCH_EXCEPTION(asrCancelAsyncEvaluation(execCtx));
 }
 } // asr
 
@@ -1003,6 +1200,11 @@ Result nvigiPluginRegister(framework::IFramework* framework)
 
     framework->addInterface(ctx.feature, &ctx.api, 0);
 
+    // Add polled interface
+    ctx.polledApi.getResults = asr::getResults;
+    ctx.polledApi.releaseResults = asr::releaseResults;
+    framework->addInterface(ctx.feature, &ctx.polledApi, 0);
+
     whisper_log_set(nvigi::asr::whisperLogCallback, nullptr);
 
     return kResultOk;
@@ -1017,13 +1219,22 @@ Result nvigiPluginDeregister()
     ai::freeCommonCapsAndRequirements(ctx.capsData);
 
 #if GGML_USE_CUBLAS
-    framework::releaseInterface(plugin::getContext()->framework, plugin::hwi::cuda::kId, ctx.icig);
-    ctx.icig = nullptr;
+    if (ctx.icig && plugin::getContext() && plugin::getContext()->framework)
+    {
+        framework::releaseInterface(plugin::getContext()->framework, plugin::hwi::cuda::kId, ctx.icig);
+        ctx.icig = nullptr;
+    }
 #elif defined(GGML_USE_D3D12)
-    framework::releaseInterface(plugin::getContext()->framework, plugin::hwi::d3d12::kId, ctx.iscg);
-    ctx.iscg = nullptr;
-    framework::releaseInterface(plugin::getContext()->framework, nvigi::core::framework::kId, ctx.isystem);
-    ctx.isystem = nullptr;
+    if (ctx.iscg && plugin::getContext() && plugin::getContext()->framework)
+    {
+        framework::releaseInterface(plugin::getContext()->framework, plugin::hwi::d3d12::kId, ctx.iscg);
+        ctx.iscg = nullptr;
+    }
+    if (ctx.isystem && plugin::getContext() && plugin::getContext()->framework)
+    {
+        framework::releaseInterface(plugin::getContext()->framework, nvigi::core::framework::kId, ctx.isystem);
+        ctx.isystem = nullptr;
+    }
 #endif
 
     whisper_log_set(nullptr, nullptr);

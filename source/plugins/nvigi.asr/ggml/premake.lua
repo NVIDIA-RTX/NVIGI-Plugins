@@ -1,9 +1,5 @@
 group "plugins/asr"
 project "nvigi.plugin.asr.ggml.cuda"
-	kind "SharedLib"
-	targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
-	objdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
-	
 	pluginBasicSetup("asr/ggml")
 	
 	defines {
@@ -47,13 +43,9 @@ project "nvigi.plugin.asr.ggml.cuda"
 
 		libdirs {
 			externaldir .."cuda//lib/x64",
+			externaldir .."whisper.cpp/cuda/lib/".."%{iif(cfg.buildcfg:startswith(\"Debug\"), \"Debug\", \"NotDebug\")}",
 		}
 		links {"ggml-cuda","ggml-base","ggml-cpu","whisper","ggml", "cuda", "cublas", "winmm"}
-
-		filter {"configurations:Debug"}
-			libdirs {externaldir .."whisper.cpp/cuda/lib/Debug"}
-		filter {"configurations:not Debug"}
-			libdirs {externaldir .."whisper.cpp/cuda/lib/NotDebug"}
 	
 	filter {"system:linux"}
 		libdirs {externaldir .."cuda/lib64", externaldir .."cuda/lib64/stubs", externaldir .."whisper.cpp/cuda/lib64"}
@@ -64,12 +56,6 @@ project "nvigi.plugin.asr.ggml.cuda"
 	add_cuda_dependencies()
 
 project "nvigi.plugin.asr.ggml.vk"
-	kind "SharedLib"
-	filter{}
-
-	targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
-	objdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
-	
 	pluginBasicSetup("asr/ggml")
 		
 	defines {
@@ -100,21 +86,18 @@ project "nvigi.plugin.asr.ggml.vk"
 			defines {"_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS"} 
 	filter{}
 
-	libdirs {externaldir .."vulkanSDK/Lib"}
-
 	filter {"system:windows"}
 		vpaths { ["impl"] = {"../*.h", "./*.h", "./*.cpp" }}
 		vpaths { ["ggml"] = {
 			externaldir .."whisper.cpp/include/**.h"
 		}}
 		
+		libdirs {
+			externaldir .."vulkanSDK/Lib",
+			externaldir .."whisper.cpp/vk/lib/".."%{iif(cfg.buildcfg:startswith(\"Debug\"), \"Debug\", \"NotDebug\")}",
+		}
 
 		links {"whisper","ggml", "ggml-base","ggml-cpu","ggml-vulkan", "winmm", "vulkan-1"}
-	
-		filter {"configurations:Debug"}
-			libdirs {externaldir .."whisper.cpp/vk/lib/Debug"}
-		filter {"configurations:not Debug"}
-			libdirs {externaldir .."whisper.cpp/vk/lib/NotDebug"}
 	
 	filter {"system:linux"}
 		libdirs {externaldir .."whisper.cpp/vk/lib64"}
@@ -130,10 +113,6 @@ if os.istarget("windows") then
 group "plugins/asr"
 
 project "nvigi.plugin.asr.ggml.cpu"
-	kind "SharedLib"
-	targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
-	objdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
-	
 	pluginBasicSetup("asr/ggml")
 	
 	defines {
@@ -163,11 +142,10 @@ project "nvigi.plugin.asr.ggml.cpu"
 	includedirs {externaldir .."whisper.cpp/include", externaldir .."whisper.cpp/ggml/include" }
 	
 	filter {"system:windows"}
-		links {"whisper","ggml", "ggml-base","ggml-cpu","winmm"}
-		filter {"configurations:Debug"}
-			libdirs {externaldir .."whisper.cpp/cpu/lib/Debug"}
-		filter {"configurations:not Debug"}
-			libdirs {externaldir .."whisper.cpp/cpu/lib/NotDebug"}	
+		libdirs {
+			externaldir .."whisper.cpp/cpu/lib/".."%{iif(cfg.buildcfg:startswith(\"Debug\"), \"Debug\", \"NotDebug\")}",
+		}
+		links {"whisper","ggml", "ggml-base","ggml-cpu","winmm"}	
 	filter {"system:linux"}
 		libdirs {externaldir .."whisper.cpp/cpu/lib64"}
 		links {"ggml-base","ggml-cpu", "whisper","ggml", "dl", "pthread", "rt"}

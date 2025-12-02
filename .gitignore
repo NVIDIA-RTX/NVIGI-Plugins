@@ -47,3 +47,6 @@ docs/_*/
 
 !/data/nvigi.test/nvigi.tts/
 
+basic_gpt.bat
+basic_asr.bat
+basic_tts.bat

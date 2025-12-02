@@ -304,11 +304,18 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
             NVIGI_LOG_ERROR("%s", e.what());
             return kResultInvalidState;
         }
-
-
+        
         {
             NVIGI_LOG_INFO("Loading model '%s'", instanceData->params.model.path.c_str());
+
+#if GGML_USE_CUBLAS
+            // ggml_backend_cuda_reg enumerates all devices which must be done before 
+            // RuntimeContextScope is constructed
+            ggml_backend_reg_t cuda_reg = ggml_backend_cuda_reg();
+
             nvigi::RuntimeContextScope scope(*instanceData);
+#endif
+
             // load the model and apply lora adapter, if any
 
             if (!ctx.initialized)
@@ -318,7 +325,84 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
                 ctx.initialized = true;
             }
 
+#if GGML_USE_CUBLAS
+            // Query the CIG-active CUDA device (if CIG is enabled) or use the device from CudaParameters
+            int targetDevice = 0;
+            
+            auto cudaParams = findStruct<CudaParameters>(_params);
+            auto d3dParams = findStruct<D3D12Parameters>(_params);
+
+            // If using CIG/D3D12, the CIG context is already current (pushed by RuntimeContextScope)
+            // Query which device it's on so embed uses the correct device
+            if (d3dParams && d3dParams->queue && instanceData->cudaContext.cudaCtx)
+            {
+                // CIG context is already current, just query which device
+                CUdevice cuDevice;
+                CUresult cuerr = cuCtxGetDevice(&cuDevice);
+                if (cuerr == CUDA_SUCCESS)
+                {
+                    targetDevice = (int)cuDevice;
+                    NVIGI_LOG_INFO("CIG context is already active on device %d, whisper will use this device",
+                        targetDevice);
+                }
+                else
+                {
+                    targetDevice = 0;
+                    NVIGI_LOG_WARN("Failed to query current device, defaulting to device 0");
+                }
+            }
+            else if (cudaParams)
+            {
+                targetDevice = cudaParams->device;
+                NVIGI_LOG_INFO("User specified CUDA device %d in CudaParameters struct", targetDevice);
+            }
+            else
+            {
+                targetDevice = 0;
+                NVIGI_LOG_INFO("No device specified, using default CUDA device 0");
+            }
+                        
+            // IMPORTANT: The devices vector must be NULL-terminated (llama.cpp expects a NULL-terminated array)
+            ggml_backend_dev_t cuda_dev = ggml_backend_reg_dev_get(cuda_reg, targetDevice);
+            instanceData->params.devices.clear();
+            instanceData->params.devices.push_back(cuda_dev);
+            instanceData->params.devices.push_back(nullptr);  // NULL terminator
+            
+            // When devices vector is specified, main_gpu is an INDEX into that vector, not a device ordinal
+            // Since we only have one device in the vector, main_gpu should always be 0
+            instanceData->params.main_gpu = 0;            
+#endif
+
+#if GGML_USE_CUBLAS || GGML_USE_VULKAN || GGML_USE_D3D12
+            // Force single GPU mode for all GPU backends (CUDA, Vulkan, D3D12) to allow graphics to run at full speed on the other GPU
+            // Note that llama is still free to run layers on CPU when it reaches the vram limit specified by the user
+            instanceData->params.split_mode = LLAMA_SPLIT_MODE_NONE;
+#endif
+
             instanceData->params.embedding = true;
+            // if the number of prompts that would be encoded is known in advance, it's more efficient to specify the
+            //	--parallel argument accordingly. for convenience, if not specified, we fallback to unified KV cache
+            //	in order to support any number of prompts
+            if (instanceData->params.n_parallel == 1) {
+                NVIGI_LOG_WARN("%s: n_parallel == 1 -> unified KV cache is enabled\n", __func__);
+                instanceData->params.kv_unified = true;
+            }
+
+            // utilize the full context
+            if (instanceData->params.n_batch < instanceData->params.n_ctx) {
+                NVIGI_LOG_WARN("%s: setting batch size to %d\n", __func__, instanceData->params.n_ctx);
+                instanceData->params.n_batch = instanceData->params.n_ctx;
+            }
+
+            // for non-causal models, batch size must be equal to ubatch size
+            if (instanceData->params.attention_type != LLAMA_ATTENTION_TYPE_CAUSAL) {
+                instanceData->params.n_ubatch = instanceData->params.n_batch;
+            }
+
+            if (instanceData->params.sampling.seed == LLAMA_DEFAULT_SEED) {
+                instanceData->params.sampling.seed = static_cast<decltype(instanceData->params.sampling.seed)>(time(NULL));
+            }
+
             instanceData->params.embd_sep = prompts_sep;
             // We set the maximum batch size as the maximum position embeddings for the model. Since the model is theoritically not capable of extracting good quality embedding beyond that.
             instanceData->params.n_batch = instanceData->modelInfo.contains("max_position_embeddings") ? (int)instanceData->modelInfo["max_position_embeddings"] : nvigi::default_max_position_embeddings;
@@ -326,8 +410,8 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
             instanceData->params.n_ubatch = instanceData->params.n_batch;
             instanceData->params.n_ctx = instanceData->params.n_batch; // context size must be smaller or equal to batch size with the new llama.cpp update
             // warmup implicitly creates a cudastream, which cig seems to need to operate correctly.  Previously warmup was causing problems ,but turning it on now (June 2025) appears fine.
-            instanceData->params.warmup = true; 
-            instanceData->llama_init = common_init_from_params(instanceData->params);            
+            instanceData->params.warmup = true;         
+            instanceData->llama_init = common_init_from_params(instanceData->params);
             if (!instanceData->llama_init.model)
             {
                 delete instanceData;
