@@ -37,9 +37,15 @@ function pluginBasicSetupInternal(name, sdk)
 		vpaths { ["extra"] = {coresdkdir .. "source/core/nvigi.extra/**.h"}}		
 		vpaths { ["plugin"] = {coresdkdir .. "source/core/nvigi.plugin/**.h",coresdkdir .. "source/core/nvigi.plugin/**.cpp"}}	
 		vpaths { ["version"] = {coresdkdir .. "source/plugins/nvigi."..name.."/resource.h",ROOT .. "source/plugins/nvigi."..name.."/versions.h",ROOT .. "source/plugins/nvigi."..name.."/**.rc"}}
-		vpaths {["premake"] = {ROOT .. "source/plugins/nvigi."..name.."/premake.lua"}
-	}
-		-- NOTE: moved the warning section after the files setup because filter was messing up inclusion of *.rc
+		vpaths {["premake"] = {ROOT .. "source/plugins/nvigi."..name.."/premake.lua"}}
+
+		-- Delay load nvcuda.dll if project name contains "cuda" or "trt" so we do not report "errors" on non-nvidia platforms
+		pname = project().name:lower()
+		if string.find(pname, "cuda") or string.find(pname, "trt") then
+			links { "delayimp.lib" }
+			linkoptions { "/DELAYLOAD:nvcuda.dll" }
+        end
+	    -- NOTE: moved the warning section after the files setup because filter was messing up inclusion of *.rc
 		
 		-- disable warnings coming from external source code
 		externalincludedirs { ROOT .. "source/plugins/nvigi."..name.."/external" }

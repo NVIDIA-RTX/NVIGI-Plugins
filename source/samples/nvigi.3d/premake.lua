@@ -20,6 +20,8 @@ project "nvigi.3d"
 		"./src/**.cpp",
 		"./src/**.rc",
 		coresdkdir .. "source/utils/**.h",
+		-- Shared wrapper headers
+		ROOT .. "source/samples/shared/cxx_wrappers/**.hpp",
 	}
 
 	defines {
@@ -55,7 +57,9 @@ project "nvigi.3d"
 		ROOT .. "source/plugins/nvigi.gpt",
 		ROOT .. "source/plugins/nvigi.tts",
 		ROOT .. "nvigi_core/source/plugins/nvigi.hwi/cuda",
-		ROOT .. "nvigi_core/source/plugins/nvigi.hwi/common"
+		ROOT .. "nvigi_core/source/plugins/nvigi.hwi/common",
+		-- Shared wrappers directory
+		ROOT .. "source/samples/shared"
 	}
 
 	includedirs {
@@ -101,6 +105,7 @@ project "nvigi.3d"
 	filter {"system:windows"}
 		vpaths { ["impl"] = {"./src/**.h","./src/**.cpp", }}
 		vpaths { ["utils"] = {ROOT .. "source/utils/**.h",ROOT .. "source/utils/**.cpp", }}
+		vpaths { ["shared"] = {ROOT .. "source/samples/shared/cxx_wrappers/**.hpp"}}
 		links { "dsound.lib", "winmm.lib" }
 	filter {"system:linux"}
 	filter {}

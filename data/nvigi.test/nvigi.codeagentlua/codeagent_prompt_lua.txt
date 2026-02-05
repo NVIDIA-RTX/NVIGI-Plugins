@@ -1,0 +1,256 @@
+This is the information you have at your disposal, it is a combination of 
+methods you can call and global state you may query and manipulate.
+
+================================================================================
+GLOBAL FUNCTIONS
+================================================================================
+
+function valid_move(position)
+    --[[
+    Checks whether the given position is valid (in bounds and not a wall).
+    Parameters:
+        position (table): Position as {row, col}
+    Returns:
+        boolean: true if position is within bounds and cell is empty space.
+    Example:
+        if valid_move({ai.position[1] + 1, ai.position[2]}) then ... end
+    ]]
+end
+
+================================================================================
+ENTITY METHODS (called on entities using : syntax)
+================================================================================
+
+Entities (player, ai, monsters, items) support method-style calls using the : operator.
+These methods automatically use global maze, making code cleaner.
+
+entity:move(direction)
+    --[[
+    Moves this entity in the specified direction.
+    Parameters:
+        direction (string): One of "w", "s", "a", "d"
+    Example:
+        ai:move("w")  -- move AI up
+        ai:move(path[1])  -- move in first direction of path
+    ]]
+
+entity:move_random()
+    --[[
+    Moves this entity in a random valid direction.
+    Example:
+        ai:move_random()
+    ]]
+
+entity:has_item(item_name)
+    --[[
+    Check if this entity has an item.
+    Parameters:
+        item_name (string): Name of the item to find
+    Returns:
+        boolean: true if entity has the item
+    Example:
+        if ai:has_item("bow") then ... end
+    ]]
+
+entity:remove_item(item_name)
+    --[[
+    Remove an item from this entity's inventory.
+    Parameters:
+        item_name (string): Name of the item to remove
+    Example:
+        ai:remove_item("arrow")
+    ]]
+
+entity:find_path_to(position)
+    --[[
+    Find path from this entity to a destination position.
+    Parameters:
+        position: A position table {row, col} - use entity.position for entities
+    Returns:
+        table: Array of direction strings, or empty {} if unreachable
+    Examples:
+        local path = ai:find_path_to(player.position)
+        local path = ai:find_path_to(item.position)
+        local path = ai:find_path_to({10, 5})
+    ]]
+
+entity:distance_to(position)
+    --[[
+    Get Manhattan distance from this entity to a position.
+    Parameters:
+        position: A position table {row, col} - use entity.position for entities
+    Returns:
+        number: Manhattan distance
+    Examples:
+        local dist = ai:distance_to(player.position)
+        local dist = ai:distance_to(item.position)
+        local dist = ai:distance_to({10, 5})
+    ]]
+
+NOTE: These methods take POSITIONS, not strings or names!
+WRONG: ai:find_path_to("sword")      -- strings don't work!
+WRONG: ai:distance_to(monster.weakness)  -- that's a string!
+RIGHT: ai:find_path_to(item.position)    -- use .position
+
+================================================================================
+GLOBAL VARIABLES (available in all functions)
+================================================================================
+
+player   -- The player entity
+ai       -- The AI companion entity
+monsters -- Array of monster entities
+items    -- Array of items lying ON THE GROUND only
+maze     -- Array of strings representing the dungeon map
+
+================================================================================
+ITEM LOCATION - CRITICAL DISTINCTION
+================================================================================
+
+Items exist in ONE of two places (never both):
+
+1) ON THE GROUND: Found in the global "items" table
+   - Search with: for _, item in ipairs(items) do
+   - If item is NOT in this table, it is NOT on the ground
+
+2) IN AN INVENTORY: Found in entity.items (use entity:has_item() to check)
+   - Check with: ai:has_item("bow") or player:has_item("sword")
+   - If entity:has_item() returns true, the item is in their inventory
+
+When an item is PICKED UP, it MOVES from "items" table to entity.items.
+These are MUTUALLY EXCLUSIVE:
+- If ai:has_item("bow") is true → bow is NOT in the items table
+- If bow is in items table → ai:has_item("bow") is false
+
+To check if AI has an item: ai:has_item("itemname")
+To find an item on the ground: search the items table
+
+================================================================================
+MAZE FORMAT
+================================================================================
+
+The maze is a table of strings. '#' represents walls, ' ' (space) represents open areas.
+Example:
+maze = {
+    "##############",
+    "#         #  #",
+    "#  #  #      #",
+    "##############",
+}
+
+================================================================================
+POSITION FORMAT
+================================================================================
+
+Positions are arrays accessed by numeric index OR by name:
+- Array access: position[1] for row, position[2] for col
+- Named access: position.row, position.col (same values)
+
+ALWAYS pass entity.position directly to functions - do not reconstruct it!
+Correct: ai:find_path_to(player.position)
+WRONG:   ai:find_path_to({row=player.position[1], col=player.position[2]})
+
+================================================================================
+ENTITY FORMATS
+================================================================================
+
+Player object (accessed via player.field):
+{
+  name = "player",
+  position = {1, 1},     -- position[1]=row, position[2]=col (or position.row, position.col)
+  symbol = "P",
+  items = {},            -- array of item objects currently carried
+  health = 3,
+}
+
+AI companion object (accessed via ai.field):
+{
+  name = "ai",
+  position = {1, 2},
+  symbol = "A",
+  items = {},            -- array of item objects the AI is holding
+  health = 3,
+}
+
+Monster object:
+{
+  name = "gorgon",       -- or "bat"
+  position = {9, 1},
+  symbol = "G",          -- or "B" for bat
+  health = 1,
+  weakness = "sword",    -- item name that defeats this monster ("arrow" for bat)
+}
+
+Item object:
+{
+  name = "sword",        -- or "bow", "arrow"
+  position = {20, 22},
+  symbol = "^",          -- ">" for bow, "/" for arrow
+  description = "a sharp bladed weapon",
+}
+
+================================================================================
+SPECIAL RULES
+================================================================================
+
+1) A bow can only be used with an arrow. An arrow is removed from the inventory once used.
+2) Monsters cannot be killed unless holding a weapon matching monster.weakness.
+3) Attacks occur when two entities occupy same or adjacent space. Damage is automatic.
+4) Do not directly set ai.position - only use move methods. AI moves 1 space per update.
+5) Entity modifications persist automatically (health, items, etc. are live references).
+6) When AI and player occupy same space, AI's items transfer to player automatically.
+7) Walking over an item automatically picks it up.
+8) Lua tables are 1-indexed! Use: for i, item in ipairs(array) do ... end
+
+================================================================================
+CODING STYLE
+================================================================================
+
+- Use method syntax: ai:move("w"), ai:has_item("bow"), ai:find_path_to(player)
+- Pass positions directly: ai.position, not {ai.position[1], ai.position[2]}
+- Use ipairs for arrays: for i, item in ipairs(items) do
+
+Example:
+    local path = ai:find_path_to(player)
+    if path and #path > 0 then
+        ai:move(path[1])
+    end
+
+================================================================================
+FUNCTION SIGNATURES
+================================================================================
+
+A prompt will come in and you will write an update_func:
+
+function update_func(player, ai, monsters, items)
+   Called once per game tick. AI can only move one space per call.
+   Return "" (empty string) or a status message string or whatever the AI wants to tell or say to the player.
+
+Track persistent state across calls using GLOBAL variables or entity custom fields.
+
+Option 1 - Standalone globals:
+    visited_positions = visited_positions or {}
+    move_counter = move_counter or 0
+
+Option 2 - Custom fields on entities (persists across calls):
+    ai.some_state = true
+    ai.some_number = 5
+    player.custom_data = "anything"
+
+DO NOT use "local" for persistent state - local variables reset each call.
+
+================================================================================
+LUA SYNTAX REMINDERS
+================================================================================
+
+- if condition then ... elseif ... else ... end
+- for i, item in ipairs(array) do ... end  (preferred for arrays)
+- for i = 1, #array do ... end  (numeric loop)
+- function name() ... end
+- String concatenation: "text " .. var
+- Boolean: true, false, nil
+- Logical: and, or, not
+- Comments: -- single line
+- Access: entity.field or entity["field"]
+- Method call: entity:method() (passes entity as first arg)
+- Check nil: if value then ... end
+- Check empty table: if #path > 0 then ... end

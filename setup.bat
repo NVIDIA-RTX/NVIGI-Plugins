@@ -2,6 +2,7 @@
 setlocal enabledelayedexpansion
 set cfg=vs2022
 set comps=""
+set premake=Yes
 :loop
 IF NOT "%1"=="" (
     IF "%1"=="vs2019" (
@@ -14,6 +15,8 @@ IF NOT "%1"=="" (
     ) ELSE IF "%1"=="-c" (        
         SET comps=-components %2
         SHIFT
+    ) ELSE IF "%1"=="-nopremake" (
+        SET premake=No
     ) ELSE (
         REM Unrecognized switch, print error message and exit
         echo Error: Unrecognized switch: %1
@@ -36,5 +39,7 @@ call .\tools\packman\packman.cmd pull -p windows-x86_64 .\tools\project.tools.xm
 
 if exist .\scripts\setup_extra.bat call .\scripts\setup_extra.bat %comps:"=%
 if exist project.xml call .\tools\packman\packman.cmd pull -p windows-x86_64 project.xml
-echo Creating project files for %cfg%
-call .\tools\premake5\premake5.exe %cfg% --file=.\premake.lua
+IF "%premake%"=="Yes" (
+    echo Creating project files for %cfg%
+    call .\tools\premake5\premake5.exe %cfg% --file=.\premake.lua
+)

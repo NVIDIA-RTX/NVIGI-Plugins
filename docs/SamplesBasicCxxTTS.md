@@ -84,7 +84,7 @@ Usage: nvigi.basic.tts.cxx [options]
   -m, --models              model repo location (REQUIRED)
   -t, --threads             number of threads (default: 8)
   --backend                 backend to use - d3d12, cuda, vulkan (default: d3d12)
-  --guid                    TTS model guid in registry format (default: {16EEB8EA-55A8-4F40-BECE-CE995AF44101})
+  --guid                    TTS model guid in registry format, in quotes (default: "{16EEB8EA-55A8-4F40-BECE-CE995AF44101}")
   --vram                    the amount of vram to use in MB (default: 2048)
   --log-level               logging level 0-2 (default: 0)
   --text                    text to synthesize (default: "Hello! This is a test of the text to speech system.")

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 
@@ -19,12 +19,27 @@ extern "C" __declspec(dllexport) const char* D3D12SDKPath = ".\\D3D12\\";
 #include <nvigi_vulkan.h>
 #include <nvigi_stl_helpers.h>
 
-// C++ wrappers
-#include "clparser.hpp"
-#include "core.hpp"
-#include "d3d12.hpp"
-#include "vulkan.hpp"
-#include "tts.hpp"
+// C++ wrappers (from shared location)
+#include "cxx_wrappers/clparser.hpp"
+#include "cxx_wrappers/core.hpp"
+#include "cxx_wrappers/d3d12.hpp"
+#include "cxx_wrappers/vulkan.hpp"
+#include "cxx_wrappers/tts/tts.hpp"
+
+// Audio playback utilities
+#ifdef NVIGI_WINDOWS
+#include "nvigi_core/source/utils/nvigi.dsound/player.h"
+
+// Simple audio player helper
+struct AudioPlayer {
+    static void play_audio(const int16_t* samples, size_t count) {
+        static nvigi::utils::Player player(16, 22050); // 16-bit PCM, 22050 Hz
+        nvigi::utils::Buffer buffer(player, samples, static_cast<DWORD>(count * sizeof(int16_t)));
+        buffer.Play();
+        buffer.Wait();
+    }
+};
+#endif
 
 using namespace nvigi::tts;
 
@@ -88,7 +103,7 @@ int main(int argc, char** argv) {
                 deviceAndQueue = nvigi::d3d12::D3D12Helper::create_best_compute_device();
                 d3d12_config = {
                     .device = deviceAndQueue.device.Get(),
-                    .command_queue = deviceAndQueue.compute_queue.Get(),
+                    .compute_queue = deviceAndQueue.compute_queue.Get(),
                     .create_committed_resource_callback = nvigi::d3d12::default_create_committed_resource,
                     .destroy_resource_callback = nvigi::d3d12::default_destroy_resource,
                     .create_resource_user_context = nullptr,

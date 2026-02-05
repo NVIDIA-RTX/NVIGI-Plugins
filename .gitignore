@@ -4,6 +4,8 @@ _artifacts/
 _nvigi_pack/
 _reshade/
 _sdk/
+bin/
+include/
 docs/_*/
 /coresdk
 __pycache__/

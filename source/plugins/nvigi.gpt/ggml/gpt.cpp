@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 
@@ -61,6 +61,8 @@ struct ggml_d3d12_ctx
     uint64_t bufferPadBytes = 0;
     uint32_t maxDescriptorSets = 32 * 1024;
     uint32_t constantBufferSize = 1024 * 256;
+    uint32_t coreCount = 0;
+    uint32_t architecture = 0;
 };
 extern void ggml_d3d12_set_params(const ggml_d3d12_ctx& ctx);
 #elif defined GGML_USE_VULKAN
@@ -330,8 +332,8 @@ struct GPTContext
     nvigi::IHWICuda* icig{};
 #elif defined(GGML_USE_D3D12)
     nvigi::IHWID3D12* iscg{};
-    nvigi::system::ISystem* isystem{};
 #endif
+    nvigi::system::ISystem* isystem{};
 };
 
 nvigi::Result evaluate(nvigi::InferenceExecutionContext* execCtx);
@@ -349,35 +351,49 @@ nvigi::Result flushAndTerminate(nvigi::gpt::InferenceContext* instance, gpt::Inf
     auto result = nvigi::kResultOk;
     if (sync.job.valid())
     {
-        // Release any results that are pending
-        if(instance->pollCtx.checkResultPending())
-        {
-            instance->pollCtx.releaseResults(nvigi::kInferenceExecutionStateDone);
-        }
+        // Make sure to signal cancellation so token generation finishes early
+        sync.cancelled.store(true);
+
         if (sync.runningChat.load())
         {
             //NVIGI_LOG_VERBOSE("Flushing running chat ...");
             {
                 std::scoped_lock lock(sync.mtx);
                 sync.runningChat.store(false);
-                sync.newInput.store(true);
+                sync.newInput.store(true); // set to true to ensure that any woken up old threads are able to continue properly.
             }
             sync.cvInput.notify_all();
         }
-        // Wait for the job to complete with timeout
-        auto result = sync.job.wait_for(std::chrono::seconds(10));
-        if (result == std::future_status::ready)
+        // Keep draining results while waiting for job to complete
+        auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (std::chrono::steady_clock::now() < timeout)
         {
-            if (NVIGI_FAILED(result, sync.job.get()))
+            // Release any pending results to unblock the background thread
+            if (instance->pollCtx.checkResultPending())
             {
-                return result;
+                instance->pollCtx.releaseResults(nvigi::kInferenceExecutionStateDone);
+            }
+
+            // Check if job is done
+            auto futureResult = sync.job.wait_for(std::chrono::milliseconds(10));
+            if (futureResult == std::future_status::ready)
+            {
+                sync.newInput.store(false); // set to false to ensure state of generate is consistent when it is first entered.
+                // Job completed, get the result
+                if (NVIGI_FAILED(result, sync.job.get()))
+                {
+                    return result;
+                }
+                return kResultOk;
             }
         }
-        else
-        {
-            NVIGI_LOG_WARN("Async job timed out.");
-            return kResultTimedOut;
-        }
+
+        // if we timeout, we still need newInput to be false for consistency.
+        sync.newInput.store(false);
+
+        // Timed out
+        NVIGI_LOG_WARN("Async job timed out.");
+        return kResultTimedOut;
     }
     return result;
 }
@@ -641,12 +657,12 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
             return res;
         }
 
-        VendorId vendor{};
-        if (NVIGI_FAILED(res, d3d12::getDeviceVendor(d3d12Params, ctx.isystem, vendor)))
+        system::Adapter* adapter{};
+        if (NVIGI_FAILED(res, d3d12::getDeviceAdapter(d3d12Params, ctx.isystem, &adapter)))
         {
             return res;
         }
-        if (vendor == VendorId::eNVDA)
+        if (adapter->vendor == VendorId::eNVDA)
         {
             if (!ctx.iscg && !framework::getInterface(plugin::getContext()->framework, plugin::hwi::d3d12::kId, &ctx.iscg))
             {
@@ -702,9 +718,11 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
             d3d12Params->createCommitResourceUserContext,
             d3d12Params->destroyResourceUserContext,
             allowReBAR,
-            0, // bufferPadBytes
-            32 * 1024, // maxDescriptorSets
-            256 * 1024 // constantBufferSize
+            0,          // bufferPadBytes
+            32 * 1024,  // maxDescriptorSets
+            256 * 1024, // constantBufferSize
+            adapter->coreCount,
+            adapter->architecture
         };
         ggml_d3d12_set_params(d3d12GGMLParams);
 #endif
@@ -896,7 +914,14 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
                 nvigi::Result cuerr = ctx.icig->cudaApplyGlobalGpuInferenceSchedulingMode(instanceData->cuda_streams.data(), instanceData->cuda_streams.size());
                 if (cuerr != kResultOk)
                 {
-                    NVIGI_LOG_WARN_ONCE("Could not set relative priority of CUDA compute and graphics. Please use 575 driver or higher\n");
+                    if (cuerr == kResultDriverOutOfDate)
+                    {
+                        NVIGI_LOG_WARN_ONCE("Could not set relative priority of CUDA compute and graphics because the driver is out of date\n");
+                    }
+                    else
+                    {
+                        NVIGI_LOG_ERROR("Could not set relative priority of CUDA compute and graphics because a CUDA error occurred.\n");
+                    }
                 }
             }
 #endif
@@ -1088,7 +1113,14 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
         nvigi::Result err = ctx.icig->cudaApplyGlobalGpuInferenceSchedulingMode(instance->cuda_streams.data(), instance->cuda_streams.size());
         if (err != kResultOk)
         {
-            NVIGI_LOG_WARN_ONCE("Could not set relative priority of compute and graphics, insufficient driver\n");
+            if (err == kResultDriverOutOfDate)
+            {
+                NVIGI_LOG_WARN_ONCE("Could not set relative priority of CUDA compute and graphics because the driver is out of date\n");
+            }
+            else
+            {
+                NVIGI_LOG_ERROR("Could not set relative priority of CUDA compute and graphics because a CUDA error occurred.\n");
+            }
         }
     }
 #endif
@@ -1626,54 +1658,46 @@ Result nvigiPluginGetInfo(framework::IFramework* framework, nvigi::plugin::Plugi
     info.minGPUArch = {};
     info.minDriver = {};
 
-#ifdef GGML_USE_CUBLAS
-    info.minDriver = { NVIGI_CUDA_MIN_DRIVER_MAJOR, NVIGI_CUDA_MIN_DRIVER_MINOR, NVIGI_CUDA_MIN_DRIVER_BUILD };
-    info.minGPUArch = { NVIGI_CUDA_MIN_GPU_ARCH };
-    info.requiredVendor = VendorId::eNVDA;
-
-    nvigi::system::ISystem* isystem{};
-    if (!framework::getInterface(framework, nvigi::core::framework::kId, &isystem))
-    {
-        NVIGI_LOG_ERROR("Missing interface from 'nvigi.plugin.hwi.cuda'");
-        return kResultInvalidState;
-    }
-
-    const nvigi::system::SystemCaps* caps = isystem->getSystemCaps();
-    if (caps && caps->driverVersion.major < 580)
-    {
-        NVIGI_LOG_WARN_ONCE("CUDA backend recommends driver version 580 or higher, current version is %d.%d.%d - see documentation for details", caps->driverVersion.major, caps->driverVersion.minor, caps->driverVersion.build);
-    }
-
-    // Must release, as we may not have the chance to release it later if we are not registered
-    framework::releaseInterface(plugin::getContext()->framework, nvigi::core::framework::kId, isystem);
-#elif defined(GGML_USE_D3D12)
     if (!framework::getInterface(framework, nvigi::core::framework::kId, &ctx.isystem))
     {
         NVIGI_LOG_ERROR("Missing interface from 'nvigi.plugin.hwi.cuda'");
         return kResultInvalidState;
     }
 
-	// Default to any adapter and no driver restrictions
-    info.requiredVendor = VendorId::eAny;
-
-	// Check if we have an NV adapter available and if so, set the minimum GPU architecture and driver version
-    const nvigi::system::SystemCaps *caps = ctx.isystem->getSystemCaps();
+    // Check if we have an NV adapter available and if so, set the minimum GPU architecture and driver version
+    bool hasNVAdapter = false;
+    const nvigi::system::SystemCaps* caps = ctx.isystem->getSystemCaps();
     for (uint32_t i = 0; i < caps->adapterCount; i++)
     {
         const nvigi::system::Adapter* adapter = caps->adapters[i];
         if (adapter->vendor == VendorId::eNVDA)
         {
-            info.minGPUArch = { NVIGI_CUDA_MIN_GPU_ARCH };
-            info.minDriver = { NVIGI_D3D12_MIN_DRIVER_MAJOR, NVIGI_D3D12_MIN_DRIVER_MINOR, NVIGI_D3D12_MIN_DRIVER_BUILD };
-            info.requiredVendor = VendorId::eNVDA;
+            hasNVAdapter = true;
             break;
         }
         // Later, we could add min driver and arch for AMD or other vendors
-	}
+    }
 
-    // Must release, as we may not have the chance to release it later if we are not registered
-    framework::releaseInterface(plugin::getContext()->framework, nvigi::core::framework::kId, ctx.isystem);
-    ctx.isystem = nullptr;
+#ifdef GGML_USE_CUBLAS
+    info.minDriver = { NVIGI_CUDA_MIN_DRIVER_MAJOR, NVIGI_CUDA_MIN_DRIVER_MINOR, NVIGI_CUDA_MIN_DRIVER_BUILD };
+    info.minGPUArch = { NVIGI_CUDA_MIN_GPU_ARCH };
+    info.requiredVendor = VendorId::eNVDA;
+
+    if (hasNVAdapter && caps->driverVersion.major < 580)
+    {
+        NVIGI_LOG_WARN_ONCE("CUDA backend recommends driver version 580 or higher, current version is %d.%d.%d - see documentation for details", caps->driverVersion.major, caps->driverVersion.minor, caps->driverVersion.build);
+    }
+#elif defined(GGML_USE_D3D12)
+	// Default to any adapter and no driver restrictions
+    info.requiredVendor = VendorId::eAny;
+
+    if (hasNVAdapter)
+    {
+        info.minGPUArch = { NVIGI_CUDA_MIN_GPU_ARCH };
+        info.minDriver = { NVIGI_D3D12_MIN_DRIVER_MAJOR, NVIGI_D3D12_MIN_DRIVER_MINOR, NVIGI_D3D12_MIN_DRIVER_BUILD };
+        info.requiredVendor = VendorId::eNVDA;
+    }
+    // Later, we could add min driver and arch for AMD or other vendors	
 #elif defined(GGML_USE_VULKAN)
 	// Requires SOME GPU with Vulkan support, no specific vendor or driver version
     info.requiredVendor = VendorId::eAny;
@@ -1681,6 +1705,10 @@ Result nvigiPluginGetInfo(framework::IFramework* framework, nvigi::plugin::Plugi
 	// No requirements for CPU backend
     info.requiredVendor = nvigi::VendorId::eNone;
 #endif
+
+    // Must release, as we may not have the chance to release it later if we are not registered
+    framework::releaseInterface(plugin::getContext()->framework, nvigi::core::framework::kId, ctx.isystem);
+    ctx.isystem = nullptr;
 
     return kResultOk;
 }

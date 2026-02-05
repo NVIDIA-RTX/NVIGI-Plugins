@@ -1,7 +1,7 @@
 # The 3D Sample
 
 > **NOTE:**
-> With the 1.3.0 release, the NVIGI 3D Sample has been moved into the main SDK itself for ease of use.  The name has changed from `NVIGISample.exe` to `nvigi.3d.exe` to reflect this change.  The sample is now built as part of the SDK build, and is available in the `<SDK_ROOT>/bin/x64` directory.  The source code for the sample is in the `<SDK_ROOT>/source/samples/nvigi.3d` directory.
+> With the 1.5.0 release, the NVIGI 3D Sample has been updated to be based upon the new "Modern C++" (CXX) NVIGI wrappers; it also handles speech recognition asynchronously and in a streamed manner.  The sample is now built as part of the SDK build, and is available in the `<SDK_ROOT>/bin/x64` directory.  The source code for the sample is in the `<SDK_ROOT>/source/samples/nvigi.3d` directory.
 
 The 3D sample, `nvigi.3d` combines NVIGI and Donut [https://github.com/NVIDIAGameWorks/donut](https://github.com/NVIDIAGameWorks/donut) to create a sample app demonstrating an NVIGI AI integration.  Using NVIGI, it's possible to support multiple backends within single application. Sample app shows one such usecase using GGML CPU, CUDA, Vulkan and D3D12-based backends. Support for multiple backends ensures application developer can create wide variety of inference pipelines. In the sample, based on user selection, particular type of backend is instantiated and used for inferencing.
 
@@ -94,16 +94,16 @@ On launch, the sample will show a UI box on the left side of the window as shown
 ```
   - The interaction controls for ASR, GPT and TTS.  Details of their use are below.
   - Three performance numbers:
-    - End-to-end audio-to-text inference time for ASR
+    - First audio to first text inference time for ASR
     - Time from start of inference to first text response for GPT
     - Time from first text input to first audio for TTS
 
 The main UI's interaction area includes controls that allow the user to type in queries to the LLM or record a spoken query to be converted to text by ASR, then passed to the LLM and finally passed to TTS.  In addition, the "Reset Chat" button clears the chat window **and** resets the LLM's history context, "forgetting" previous discussion.  Typed and spoken input is handled as follows:
 
-1. **Speech**.  Click the "Record" button to start recording (the "Record" button will be replaced by a "Stop" button.  Then, speak a question, and conclude by pressing the "Stop" button.  The ASR plugin will compute speech recognition and print the recognized text, which will then be sent to the LLM for a response that will be printed in the UI. In the case of the GPT plugin being deactivated, the text will be sent directly to TTS.  If the text returned from ASR is a form of "[BLANK AUDIO]", then check you Windows microphone settings, as the audio may not be getting routed correctly in Windows. To test different microphones, user should select microphone from Windows settings.  The model shipping with this release is the Whisper Small Multi-lingual, which supports a *wide* range of languages, with varying levels of quality/coverage.
+1. **Speech**.  Click the "Record" button to start recording (the "Record" button will be replaced by a "Stop" button.  Then, speak a question, and conclude by pressing the "Stop" button.  The ASR plugin will compute speech recognition and print the recognized text as the user records.  This is done live, and the user can see the results as they speak.  Once "Stop" is pressed, speech recongition will complete and the resulting text will then be sent to the LLM for a response that will be printed in the UI. In the case of the GPT plugin being deactivated, the text will be sent directly to TTS.  If the text returned from ASR is a form of "[BLANK AUDIO]", then check you Windows microphone settings, as the audio may not be getting routed correctly in Windows. To test different microphones, user should select microphone from Windows settings.  The model shipping with this release is the Whisper Small Multi-lingual, which supports a *wide* range of languages, with varying levels of quality/coverage.
 1. **Typing**.  Click in the small, blank text line at the bottom of the UI, type your query and press the Enter or Return key.  The text will be sent to the LLM and the result printed to the UI.
 If the GPT plugin is deactivated, the text will be sent directly to TTS. 
-1. **Text To Speech** By default, no TTS model is selected. Please choose one in the model settings to use TTS. The target voice can be changed through the UI.
+1. **Text To Speech** The target voice can be changed through the UI.
 
 ### The Options Dialog
 

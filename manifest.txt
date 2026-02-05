@@ -98,6 +98,7 @@
 	nvigi-sdk-source\data\nvigi.test\nvigi.asr/jfk.wav
 	nvigi-sdk-source\data\nvigi.test\nvigi.asr/micro-machines.wav
 	nvigi-sdk-source\data\nvigi.test\nvigi.asr/whisper-stream-test.wav
+	nvigi-sdk-source\data\nvigi.test\nvigi.codeagentlua/codeagent_prompt_lua.txt
 	nvigi-sdk-source\data\nvigi.test\nvigi.rag/LegendOfDoria_Corpus.txt
 	nvigi-sdk-source\data\nvigi.test\nvigi.rag/LegendOfDoria_SampleQuestions.txt
 	nvigi-sdk-source\data\nvigi.test\nvigi.tts\asqflow\mel_spectrograms_targets/02_F-Emma_Maidenberg_15s_se.bin
@@ -123,6 +124,7 @@
 	nvigi-sdk-source\docs/SamplesBasicCxxASR.md
 	nvigi-sdk-source\docs/SamplesBasicCxxGPT.md
 	nvigi-sdk-source\docs/SamplesBasicCxxTTS.md
+	nvigi-sdk-source\docs/SamplesCodeAgentLua.md
 	nvigi-sdk-source\docs/SamplesFcall.md
 	nvigi-sdk-source\docs/SamplesPipeline.md
 	nvigi-sdk-source\docs/SamplesRAG.md
@@ -145,71 +147,79 @@
 	nvigi-sdk-source\premake/premake.utils.lua
 	nvigi-sdk-source\source\plugins\nvigi.aip/aipEntry.cpp
 	nvigi-sdk-source\source\plugins\nvigi.aip/nvigi_aip.h
+	nvigi-sdk-source\source\plugins\nvigi.aip/package.py
 	nvigi-sdk-source\source\plugins\nvigi.aip/plugin.rc
 	nvigi-sdk-source\source\plugins\nvigi.aip/premake.lua
 	nvigi-sdk-source\source\plugins\nvigi.aip/resource.h
 	nvigi-sdk-source\source\plugins\nvigi.aip/versions.h
+	nvigi-sdk-source\source\plugins\nvigi.aip\__pycache__/package.cpython-38.pyc
 	nvigi-sdk-source\source\plugins\nvigi.asr/nvigi_asr_whisper.h
 	nvigi-sdk-source\source\plugins\nvigi.asr\ggml/nvcf.h
+	nvigi-sdk-source\source\plugins\nvigi.asr\ggml/package.py
 	nvigi-sdk-source\source\plugins\nvigi.asr\ggml/plugin.rc
 	nvigi-sdk-source\source\plugins\nvigi.asr\ggml/premake.lua
 	nvigi-sdk-source\source\plugins\nvigi.asr\ggml/resource.h
 	nvigi-sdk-source\source\plugins\nvigi.asr\ggml/stt.cpp
 	nvigi-sdk-source\source\plugins\nvigi.asr\ggml/stt.h
 	nvigi-sdk-source\source\plugins\nvigi.asr\ggml/versions.h
+	nvigi-sdk-source\source\plugins\nvigi.asr\ggml\__pycache__/package.cpython-38.pyc
 	nvigi-sdk-source\source\plugins\nvigi.embed/nvigi_embed.h
 	nvigi-sdk-source\source\plugins\nvigi.embed\ggml/embed.cpp
 	nvigi-sdk-source\source\plugins\nvigi.embed\ggml/embed.h
+	nvigi-sdk-source\source\plugins\nvigi.embed\ggml/package.py
 	nvigi-sdk-source\source\plugins\nvigi.embed\ggml/plugin.rc
 	nvigi-sdk-source\source\plugins\nvigi.embed\ggml/premake.lua
 	nvigi-sdk-source\source\plugins\nvigi.embed\ggml/resource.h
 	nvigi-sdk-source\source\plugins\nvigi.embed\ggml/versions.h
+	nvigi-sdk-source\source\plugins\nvigi.embed\ggml\__pycache__/package.cpython-38.pyc
 	nvigi-sdk-source\source\plugins\nvigi.gpt/nvigi_gpt.h
 	nvigi-sdk-source\source\plugins\nvigi.gpt\ggml/gpt.cpp
 	nvigi-sdk-source\source\plugins\nvigi.gpt\ggml/gpt.h
 	nvigi-sdk-source\source\plugins\nvigi.gpt\ggml/nvcf.h
+	nvigi-sdk-source\source\plugins\nvigi.gpt\ggml/package.py
 	nvigi-sdk-source\source\plugins\nvigi.gpt\ggml/plugin.rc
 	nvigi-sdk-source\source\plugins\nvigi.gpt\ggml/premake.lua
 	nvigi-sdk-source\source\plugins\nvigi.gpt\ggml/resource.h
 	nvigi-sdk-source\source\plugins\nvigi.gpt\ggml/versions.h
+	nvigi-sdk-source\source\plugins\nvigi.gpt\ggml\__pycache__/package.cpython-38.pyc
 	nvigi-sdk-source\source\plugins\nvigi.gpt\rest/gpt.cpp
 	nvigi-sdk-source\source\plugins\nvigi.gpt\rest/gpt.h
+	nvigi-sdk-source\source\plugins\nvigi.gpt\rest/package.py
 	nvigi-sdk-source\source\plugins\nvigi.gpt\rest/plugin.rc
 	nvigi-sdk-source\source\plugins\nvigi.gpt\rest/premake.lua
 	nvigi-sdk-source\source\plugins\nvigi.gpt\rest/resource.h
 	nvigi-sdk-source\source\plugins\nvigi.gpt\rest/versions.h
-	nvigi-sdk-source\source\plugins\nvigi.net/net.cpp
-	nvigi-sdk-source\source\plugins\nvigi.net/net.h
-	nvigi-sdk-source\source\plugins\nvigi.net/netEntry.cpp
-	nvigi-sdk-source\source\plugins\nvigi.net/nvigi_net.h
-	nvigi-sdk-source\source\plugins\nvigi.net/plugin.rc
-	nvigi-sdk-source\source\plugins\nvigi.net/premake.lua
-	nvigi-sdk-source\source\plugins\nvigi.net/resource.h
-	nvigi-sdk-source\source\plugins\nvigi.net/versions.h
+	nvigi-sdk-source\source\plugins\nvigi.gpt\rest\__pycache__/package.cpython-38.pyc
 	nvigi-sdk-source\source\plugins\nvigi.tts/nvigi_tts.h
+	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\ggml/package.py
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\ggml/plugin.rc
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\ggml/premake.lua
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\ggml/resource.h
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\ggml/tts.cpp
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\ggml/tts.h
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\ggml/versions.h
+	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\ggml\__pycache__/package.cpython-38.pyc
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/asqflow.cpp
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/asqflow.h
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/asqflow_inference.cpp
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/asqflow_inference.h
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/language_normalizer.cpp
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/language_normalizer.h
+	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/package.py
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/plugin.rc
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/premake.lua
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/resource.h
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/symbols.h
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/versions.h
+	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt\__pycache__/package.cpython-38.pyc
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt\external_trt/README.md
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt\external_trt/TRTModel.h
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt\external_trt/TRTTensor.h
 	nvigi-sdk-source\source\samples\nvigi.3d/.gitattributes
 	nvigi-sdk-source\source\samples\nvigi.3d/.gitignore
+	nvigi-sdk-source\source\samples\nvigi.3d/package.py
 	nvigi-sdk-source\source\samples\nvigi.3d/premake.lua
+	nvigi-sdk-source\source\samples\nvigi.3d\__pycache__/package.cpython-38.pyc
 	nvigi-sdk-source\source\samples\nvigi.3d\opt-local-donut/.gitignore
 	nvigi-sdk-source\source\samples\nvigi.3d\opt-local-donut/01_pull.bat
 	nvigi-sdk-source\source\samples\nvigi.3d\opt-local-donut/02_setup.bat
@@ -222,37 +232,137 @@
 	nvigi-sdk-source\source\samples\nvigi.3d\src/UIRenderer.h
 	nvigi-sdk-source\source\samples\nvigi.3d\src/main.cpp
 	nvigi-sdk-source\source\samples\nvigi.3d\src\DeviceManagerOverride/DeviceManagerOverride_VK.cpp
-	nvigi-sdk-source\source\samples\nvigi.3d\src\nvigi/AudioRecordingHelper.cpp
-	nvigi-sdk-source\source\samples\nvigi.3d\src\nvigi/AudioRecordingHelper.h
 	nvigi-sdk-source\source\samples\nvigi.3d\src\nvigi/AudioToBytes.h
 	nvigi-sdk-source\source\samples\nvigi.3d\src\nvigi/NVIGIContext.cpp
 	nvigi-sdk-source\source\samples\nvigi.3d\src\nvigi/NVIGIContext.h
 	nvigi-sdk-source\source\samples\nvigi.basic/basic.cpp
+	nvigi-sdk-source\source\samples\nvigi.basic/package.py
 	nvigi-sdk-source\source\samples\nvigi.basic/premake.lua
-	nvigi-sdk-source\source\samples\nvigi.basic.cxx/clparser.hpp
-	nvigi-sdk-source\source\samples\nvigi.basic.cxx/core.hpp
-	nvigi-sdk-source\source\samples\nvigi.basic.cxx/d3d12.hpp
-	nvigi-sdk-source\source\samples\nvigi.basic.cxx/vulkan.hpp
-	nvigi-sdk-source\source\samples\nvigi.basic.cxx\asr/asr.hpp
-	nvigi-sdk-source\source\samples\nvigi.basic.cxx\asr/audio.hpp
 	nvigi-sdk-source\source\samples\nvigi.basic.cxx\asr/basic_asr.cpp
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx\asr/package.py
 	nvigi-sdk-source\source\samples\nvigi.basic.cxx\asr/premake.lua
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx\asr\__pycache__/package.cpython-38.pyc
 	nvigi-sdk-source\source\samples\nvigi.basic.cxx\gpt/basic_gpt.cpp
 	nvigi-sdk-source\source\samples\nvigi.basic.cxx\gpt/cloud_test.json
-	nvigi-sdk-source\source\samples\nvigi.basic.cxx\gpt/gpt.hpp
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx\gpt/package.py
 	nvigi-sdk-source\source\samples\nvigi.basic.cxx\gpt/premake.lua
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx\gpt\__pycache__/package.cpython-38.pyc
 	nvigi-sdk-source\source\samples\nvigi.basic.cxx\tts/basic_tts.cpp
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx\tts/package.py
 	nvigi-sdk-source\source\samples\nvigi.basic.cxx\tts/premake.lua
-	nvigi-sdk-source\source\samples\nvigi.basic.cxx\tts/tts.hpp
+	nvigi-sdk-source\source\samples\nvigi.basic.cxx\tts\__pycache__/package.cpython-38.pyc
+	nvigi-sdk-source\source\samples\nvigi.basic\__pycache__/package.cpython-38.pyc
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\doc/OSIApproved.png
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\doc/contents.html
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\doc/index.css
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\doc/logo.png
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\doc/lua.1
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\doc/lua.css
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\doc/luac.1
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\doc/manual.css
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\doc/manual.html
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\doc/readme.html
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lapi.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lapi.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lauxlib.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lauxlib.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lbaselib.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lcode.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lcode.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lcorolib.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lctype.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lctype.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/ldblib.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/ldebug.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/ldebug.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/ldo.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/ldo.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/ldump.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lfunc.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lfunc.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lgc.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lgc.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/linit.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/liolib.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/ljumptab.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/llex.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/llex.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/llimits.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lmathlib.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lmem.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lmem.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/loadlib.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lobject.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lobject.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lopcodes.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lopcodes.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lopnames.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/loslib.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lparser.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lparser.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lprefix.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lstate.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lstate.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lstring.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lstring.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lstrlib.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/ltable.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/ltable.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/ltablib.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/ltm.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/ltm.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lua.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lua.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lua.hpp
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/luac.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/luaconf.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lualib.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lundump.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lundump.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lutf8lib.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lvm.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lvm.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lzio.c
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\external\lua\src/lzio.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\src/game.cpp
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\src/game.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\src/llm.cpp
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\src/llm.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\src/lua_bindings.cpp
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\src/lua_bindings.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\src/main.cpp
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\src/package.py
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\src/premake.lua
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\src/render.cpp
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\src/render.h
+	nvigi-sdk-source\source\samples\nvigi.codeagentlua\src\__pycache__/package.cpython-38.pyc
 	nvigi-sdk-source\source\samples\nvigi.fcall/fcall.cpp
+	nvigi-sdk-source\source\samples\nvigi.fcall/package.py
 	nvigi-sdk-source\source\samples\nvigi.fcall/premake.lua
+	nvigi-sdk-source\source\samples\nvigi.fcall\__pycache__/package.cpython-38.pyc
+	nvigi-sdk-source\source\samples\nvigi.pipeline/package.py
 	nvigi-sdk-source\source\samples\nvigi.pipeline/pipeline.cpp
 	nvigi-sdk-source\source\samples\nvigi.pipeline/premake.lua
+	nvigi-sdk-source\source\samples\nvigi.pipeline\__pycache__/package.cpython-38.pyc
+	nvigi-sdk-source\source\samples\nvigi.rag/package.py
 	nvigi-sdk-source\source\samples\nvigi.rag/premake.lua
 	nvigi-sdk-source\source\samples\nvigi.rag/rag.cpp
+	nvigi-sdk-source\source\samples\nvigi.rag\__pycache__/package.cpython-38.pyc
 	nvigi-sdk-source\source\samples\nvigi.reload/d3d12.h
+	nvigi-sdk-source\source\samples\nvigi.reload/package.py
 	nvigi-sdk-source\source\samples\nvigi.reload/premake.lua
 	nvigi-sdk-source\source\samples\nvigi.reload/reload.cpp
+	nvigi-sdk-source\source\samples\nvigi.reload\__pycache__/package.cpython-38.pyc
+	nvigi-sdk-source\source\samples\shared\cxx_wrappers/README.md
+	nvigi-sdk-source\source\samples\shared\cxx_wrappers/clparser.hpp
+	nvigi-sdk-source\source\samples\shared\cxx_wrappers/core.hpp
+	nvigi-sdk-source\source\samples\shared\cxx_wrappers/d3d12.hpp
+	nvigi-sdk-source\source\samples\shared\cxx_wrappers/io_helpers.hpp
+	nvigi-sdk-source\source\samples\shared\cxx_wrappers/vulkan.hpp
+	nvigi-sdk-source\source\samples\shared\cxx_wrappers\asr/asr.hpp
+	nvigi-sdk-source\source\samples\shared\cxx_wrappers\asr/audio.hpp
+	nvigi-sdk-source\source\samples\shared\cxx_wrappers\gpt/gpt.hpp
+	nvigi-sdk-source\source\samples\shared\cxx_wrappers\tts/tts.hpp
 	nvigi-sdk-source\source\shared/sharedVersions.h
 	nvigi-sdk-source\tools/lf2crlf.ps1
 	nvigi-sdk-source\tools/project.tools.xml

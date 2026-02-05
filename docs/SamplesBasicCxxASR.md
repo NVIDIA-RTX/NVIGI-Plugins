@@ -52,7 +52,7 @@ bin\x64\nvigi.basic.asr.cxx.exe --models <SDK_MODELS> --sdk bin\x64
 bin\x64\nvigi.basic.asr.cxx.exe --models data/nvigi.models --sdk bin\x64
 ```
 
-4. At the prompt, type `record` to start a 5-second recording
+4. At the prompt, press enter with no text to start a 5-second recording
 5. Speak into your microphone during the recording
 6. The transcribed text will be displayed after recording completes
 7. Type `quit` or `exit` to exit the application
@@ -67,7 +67,7 @@ Streaming mode provides real-time continuous audio streaming with incremental tr
 bin\x64\nvigi.basic.asr.cxx.exe --models data/nvigi.models --sdk bin\x64 --streaming
 ```
 
-2. At the prompt, type `stream` to start real-time streaming
+2. At the prompt, press enter with no text to start real-time streaming
 3. Speak into your microphone - you'll see transcription appear in real-time
 4. Press Enter to stop streaming
 5. Type `quit` or `exit` to exit the application
@@ -83,7 +83,7 @@ Usage: nvigi.basic.asr.cxx [options]
   -t, --threads          number of threads (default: 8)
   --fa, --flash-attention   use flash attention
   --backend              backend to use - d3d12, cuda, vulkan (default: d3d12)
-  --guid                 ASR model guid in registry format (default: {5CAD3A03-1272-4D43-9F3D-655417526170})
+  --guid                 ASR model guid in registry format, in quotes (default: "{5CAD3A03-1272-4D43-9F3D-655417526170}")
   --vram                 the amount of vram to use in MB (default: 2048)
   --log-level            logging level 0-2 (default: 0)
   --language             language code (en, es, fr, auto, etc.) (default: en)

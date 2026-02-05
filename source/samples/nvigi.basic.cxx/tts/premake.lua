@@ -12,10 +12,11 @@ project "nvigi.basic.tts.cxx"
     files {
         "./**.h",
         "./**.hpp",
-        "../**.hpp",
         "./**.cpp",
         "./**.rc",
         coresdkdir .. "source/utils/**.h",
+        -- Shared wrapper headers
+        ROOT .. "source/samples/shared/cxx_wrappers/**.hpp",
     }
 
     includedirs {
@@ -24,13 +25,14 @@ project "nvigi.basic.tts.cxx"
         coresdkdir .. "source/utils",
         ROOT .. "source/plugins/nvigi.tts",
         ROOT .. "external/vulkanSDK/include",
-        ".."
+        -- Shared wrappers directory
+        ROOT .. "source/samples/shared"
     }
         
 
     filter {"system:windows"}
         vpaths { ["impl"] = {"./**.h","./**.hpp", "./**.cpp", }}
-        vpaths { ["shared"] = {"../**.hpp"}}
+        vpaths { ["shared"] = {ROOT .. "source/samples/shared/cxx_wrappers/**.hpp"}}
         vpaths { ["utils"] = {ROOT .. "source/utils/**.h",ROOT .. "source/utils/**.cpp", }}
         libdirs { externaldir .. "vulkanSDK/Lib" }
         links { "d3d12.lib", "dxgi.lib", "vulkan-1.lib", "dsound.lib" }

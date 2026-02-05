@@ -4,7 +4,7 @@ The focus of this guide is on using AI Inference Manager to integrate a TTS mode
 
 > **MIN RUNTIME SPEC:** Note that all TTS Riva Magpie Flow backends require a CPU supporting AVX2 instructions.  Support for this instruction extension is ubiquitous in modern gaming CPUs, but older hardware may not support it.
 
-> **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the SDK's Basic command line sample. For modern C++ examples, see [basic_tts.cpp](../source/samples/nvigi.basic.cxx/tts/basic_tts.cpp) which demonstrates both the low-level C API and the modern C++ wrapper with RAII, `std::expected`, and builder patterns. The wrapper code is located in [tts.hpp](../source/samples/nvigi.basic.cxx/tts/tts.hpp).
+> **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the SDK's Basic command line sample. For modern C++ examples, see [basic_tts.cpp](../source/samples/nvigi.basic.cxx/tts/basic_tts.cpp) which demonstrates both the low-level C API and the modern C++ wrapper with RAII, `std::expected`, and builder patterns. The wrapper code is located in [tts.hpp](../source/samples/shared/cxx_wrappers/tts/tts.hpp).
 
 > **RECOMMENDED**: For new projects, consider using the **Modern C++ Wrapper** (sections 1.2.1, 2.1, 3.1, 4.3, 6.1, and 7.1) which provides a cleaner API with automatic resource management, error handling via `std::expected`, and game-loop friendly async operations.
 
@@ -96,7 +96,7 @@ Please read the [Programming Guide](../../../nvigi_core/docs/ProgrammingGuide.md
 
 ### 1.2.1 MODERN C++ WRAPPER (RECOMMENDED)
 
-The NVIGI SDK provides modern C++ wrappers that simplify initialization and provide a cleaner API with RAII, `std::expected`, and builder patterns. The wrappers are located in `source/samples/nvigi.basic.cxx/` and can be used in your projects.
+The NVIGI SDK provides modern C++ wrappers that simplify initialization and provide a cleaner API with RAII, `std::expected`, and builder patterns. The wrappers are located in `source/samples/shared/cxx_wrappers/` and can be used in your projects.
 
 ```cpp
 #include "core.hpp"
@@ -473,11 +473,25 @@ auto ttsOnComplete = [](const nvigi::InferenceExecutionContext *ctx, nvigi::Infe
 
 Alternatively, when using evaluateAsync, you can poll for results instead of using a callback. This is useful when you want more control over when to process results or need to integrate with a polling-based architecture:
 
+> **NOTE:** `END_PROMPT_ASYNC` is defined in `nvigi_tts.h` header file.
+
 ```cpp
+#include "nvigi_tts.h"
+
 // Start async evaluation without a callback
 ttsContext.callback = nullptr;
+
+// Send your text (can be sent in chunks for streaming)
+inputPromptData = "Hello! This is my text.";
 if (NVIGI_FAILED(res, ttsContext.instance->evaluateAsync(&ttsContext))) {
     LOG("NVIGI async evaluation failed, code %d", res);
+    return;
+}
+
+// IMPORTANT: Signal end of text input by sending END_PROMPT_ASYNC
+inputPromptData = END_PROMPT_ASYNC;
+if (NVIGI_FAILED(res, ttsContext.instance->evaluateAsync(&ttsContext))) {
+    LOG("NVIGI failed to send END_PROMPT_ASYNC, code %d", res);
     return;
 }
 
@@ -761,12 +775,21 @@ Here's how to cancel an async evaluation:
 // Start async evaluation for text-to-speech
 ttsContext.callback = nullptr;
 
+// Send text chunks
+inputPromptData = "Your text here";
 if (NVIGI_FAILED(res, ttsContext.instance->evaluateAsync(&ttsContext))) {
     LOG("NVIGI async evaluation failed, code %d", res);
     return;
 }
 
-// ... continue sending text chunks via evaluateAsync ...
+// ... continue sending more text chunks via evaluateAsync ...
+
+// IMPORTANT: Must send END_PROMPT_ASYNC to signal completion
+inputPromptData = END_PROMPT_ASYNC;
+if (NVIGI_FAILED(res, ttsContext.instance->evaluateAsync(&ttsContext))) {
+    LOG("NVIGI failed to send END_PROMPT_ASYNC, code %d", res);
+    return;
+}
 
 // User decides to cancel
 if (NVIGI_FAILED(res, ttsInstance->cancelAsyncEvaluation(&ttsContext))) {
@@ -832,6 +855,7 @@ monitorThread = std::thread([&]() {
 ttsContext.callback = nullptr;
 
 std::vector<std::string> textChunks = getTextChunksFromLLM();
+
 for (size_t i = 0; i < textChunks.size(); i++) {
     // Check if user wants to cancel
     if (userRequestedCancel) {
@@ -841,12 +865,19 @@ for (size_t i = 0; i < textChunks.size(); i++) {
     }
     
     // Send text chunk
-    inputTextData.buffer = textChunks[i].data();
-    inputTextData.sizeInBytes = textChunks[i].size();
+    inputTextData = textChunks[i];
     
     if (NVIGI_FAILED(res, ttsContext.instance->evaluateAsync(&ttsContext))) {
         LOG("Failed to send text chunk");
         break;
+    }
+}
+
+// Send END_PROMPT_ASYNC if we didn't cancel
+if (!userRequestedCancel) {
+    inputTextData = END_PROMPT_ASYNC;
+    if (NVIGI_FAILED(res, ttsContext.instance->evaluateAsync(&ttsContext))) {
+        LOG("Failed to send END_PROMPT_ASYNC");
     }
 }
 
@@ -955,6 +986,34 @@ The C++ wrapper uses RAII for automatic resource management - no manual cleanup 
 
 ### Async mode
 The asynchronous mode (`evaluateAsync`) allows you to provide input prompts while processing continues in the background. This is particularly useful if you're expecting long outputs from a GPT model and need TTS to begin processing before the GPT model has finished responding.
+
+> **IMPORTANT:** When using `evaluateAsync`, you **must** send `END_PROMPT_ASYNC` as the final input to signal that you have finished sending text. This tells the TTS system that no more text chunks will be coming and it can complete processing.
+>
+> `END_PROMPT_ASYNC` is defined in `nvigi_tts.h`:
+> ```cpp
+> #include "nvigi_tts.h"
+> 
+> // END_PROMPT_ASYNC is a constant string defined as: "END_PROMPT_ASYNC"
+> ```
+
+#### Example Usage Pattern:
+
+```cpp
+// Send your text chunks
+inputPromptData = "First sentence.";
+ctx.instance->evaluateAsync(&ctx);
+
+inputPromptData = "Second sentence.";
+ctx.instance->evaluateAsync(&ctx);
+
+// REQUIRED: Signal end of input
+inputPromptData = END_PROMPT_ASYNC;
+ctx.instance->evaluateAsync(&ctx);
+
+// Now poll for results or use callback to receive audio
+```
+
+Without sending `END_PROMPT_ASYNC`, the TTS system will continue waiting for more text input and will not complete processing.
 
 ### Adding Custom Phonemes
 

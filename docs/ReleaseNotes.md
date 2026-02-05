@@ -1,7 +1,19 @@
 # Release Notes
 
+## 1.5.0 Release
+- New code agent sample
+- New modern C++ code samples
+- New custom plugin creation tutorial
+- Performance improvements
+>KNOWN ISSUES:
+>- The NVIGI core unit tests (`nvigi.tests.exe`) currently does not support AMD hardware; this will be fixed in a future release.
+>- The NVIGI SDK's [Function Call sample](SamplesFcall.md) may hang at first inference when built from source while using older compiler components; this will be fixed in a future release.
+>- In detailed testing of the [3D Sample](Samples3D.md) in Vulkan rendering with the ASR GGML Vulkan backend, we have found an intermittent crash in (only) the first inference on RTX4090.  When run in a Vulkan-based 3D application, we recommend using the GGML CUDA ASR backend, rather than the GGML VK ASR backend with this release.  We are currently investigating this issue.
+
 ## 1.4.0 Release
-- TODO
+- New models supported: Nemotron Nano 9B v2, Qwen3 0.6B, Qwen3 4B, Qwen3 8B
+- Performance improvements
+- Documentation improvements
 
 ## 1.3.0 Release
 - This release of NVIGI includes a significant upgrade to how the SDK pack is laid out and organized.  The Plugin SDK is now the top-level directory, and the existing 3D Sample has now been moved into the same directory tree and build solution as all of the command-line samples.  This simplifies the build, run and debugging workflow for the 3D sample, making it a first-class citizen of the SDK.

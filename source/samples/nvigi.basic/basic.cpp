@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 
@@ -327,6 +327,7 @@ struct NVIGIAppCtx
 {
     HMODULE coreLib{};
     nvigi::IAutoSpeechRecognition* iasr{};
+    nvigi::PluginID asrId{};
     nvigi::InferenceInstance* asr{};
     nvigi::IGeneralPurposeTransformer* igpt{};
     nvigi::PluginID gptId{};
@@ -409,12 +410,26 @@ int ShutdownNVIGI()
 ///////////////////////////////////////
 //! ASR Init and Release
 
-int InitASR(const std::string& modelDir, const std::string& guidASR, size_t vramBudgetMB)
+int InitASR(const std::string& modelDir, const std::string& asrBackend, const std::string& guidASR, size_t vramBudgetMB)
 {
     loggingPrint(nvigi::LogType::eInfo, "Initializing ASR\n");
 
     //! ASR Interface and Instance
-    if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigi::plugin::asr::ggml::cuda::kId, &nvigiCtx.iasr, ptr_nvigiLoadInterface)))
+    nvigiCtx.asrId = nvigi::plugin::asr::ggml::cuda::kId;
+    if (asrBackend == "cpu")
+    {
+        nvigiCtx.asrId = nvigi::plugin::asr::ggml::cpu::kId;
+    }
+    else if (asrBackend == "vulkan")
+    {
+        nvigiCtx.asrId = nvigi::plugin::asr::ggml::vulkan::kId;
+    }
+    else if (asrBackend != "cuda")
+    {
+        loggingPrint(nvigi::LogType::eWarn, ("Unknown asr backend '" + asrBackend + "', defaulting to 'cuda'\n").c_str());
+    }
+
+    if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigiCtx.asrId, &nvigiCtx.iasr, ptr_nvigiLoadInterface)))
     {
         loggingPrint(nvigi::LogType::eError, "Could not query ASR interface");
         return -1;
@@ -450,8 +465,7 @@ int ReleaseASR()
 {
     nvigiCtx.iasr->destroyInstance(nvigiCtx.asr);
 
-    // Hard-coded to local
-    if (NVIGI_FAILED(result, ptr_nvigiUnloadInterface(nvigi::plugin::asr::ggml::cuda::kId, nvigiCtx.iasr)))
+    if (NVIGI_FAILED(result, ptr_nvigiUnloadInterface(nvigiCtx.asrId, nvigiCtx.iasr)))
     {
         loggingPrint(nvigi::LogType::eError, "Error in 'nvigiUnloadInterface'");
         return -1;
@@ -463,13 +477,30 @@ int ReleaseASR()
 ///////////////////////////////////////
 //! GPT Init and Release
 
-int InitGPT(const std::string& modelDir, const std::string& gptMode, const std::string& cloudToken, const std::string& guidGPT, size_t vramBudgetMB)
+int InitGPT(const std::string& modelDir, const std::string& gptBackend, const std::string& cloudToken, const std::string& guidGPT, size_t vramBudgetMB)
 {
     loggingPrint(nvigi::LogType::eInfo, "Initializing GPT\n");
 
     //! GPT Interface and Instance
     //! When using GPT cloud it does not matter which endpoint we are going to hit, they all use the same REST based backend
-    nvigiCtx.gptId = gptMode == "local" ? nvigi::plugin::gpt::ggml::cuda::kId : nvigi::plugin::gpt::cloud::rest::kId;
+    nvigiCtx.gptId = nvigi::plugin::gpt::ggml::cuda::kId;
+    if (gptBackend == "cloud")
+    {
+        nvigiCtx.gptId = nvigi::plugin::gpt::cloud::rest::kId;
+    }
+    else if (gptBackend == "cpu")
+    {
+        nvigiCtx.gptId = nvigi::plugin::gpt::ggml::cpu::kId;
+    }
+    else if (gptBackend == "vulkan")
+    {
+        nvigiCtx.gptId = nvigi::plugin::gpt::ggml::vulkan::kId;
+    }
+    else if (gptBackend != "cuda")
+    {
+        loggingPrint(nvigi::LogType::eWarn, ("Unknown gpt backend '" + gptBackend + "', defaulting to 'cuda'\n").c_str());
+    }
+
     if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigiCtx.gptId, &nvigiCtx.igpt, ptr_nvigiLoadInterface)))
     {
         loggingPrint(nvigi::LogType::eError, "Could not query GPT interface");
@@ -575,7 +606,6 @@ int ReleaseGPT()
 {
     nvigiCtx.igpt->destroyInstance(nvigiCtx.gpt);
 
-    // Hard-coded to local
     if (NVIGI_FAILED(result, ptr_nvigiUnloadInterface(nvigiCtx.gptId, nvigiCtx.igpt)))
     {
         loggingPrint(nvigi::LogType::eError, "Error in 'nvigiUnloadInterface'");
@@ -589,21 +619,46 @@ int ReleaseGPT()
 //! TTS Init and Release
 
 #ifdef NVIGI_WINDOWS
-int InitTTS(const std::string& modelDir, 
+int InitTTS(const std::string& modelDir, const std::string& ttsBackend,
     const std::string& extendedPhonemeDict, const std::string& guidTTS, size_t vramBudgetMB)
 {
     loggingPrint(nvigi::LogType::eInfo, "Initializing TTS\n");
 
     //! TTS Interface and Instance
-    //! Detect backend based on GUID
-    //! GGML: {16EEB8EA-55A8-4F40-BECE-CE995AF44101}
-    //! TRT:  {81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F}
-    nvigiCtx.ttsId = (guidTTS == "{16EEB8EA-55A8-4F40-BECE-CE995AF44101}" || guidTTS == "{3D52FDC0-5B6D-48E1-B108-84D308818602}") ? 
-        nvigi::plugin::tts::asqflow_ggml::cuda::kId : nvigi::plugin::tts::asqflow_trt::kId;
+    nvigiCtx.ttsId = nvigi::plugin::tts::asqflow_trt::kId;
+    if (ttsBackend == "cuda")
+    {
+        nvigiCtx.ttsId = nvigi::plugin::tts::asqflow_ggml::cuda::kId;
+    }
+    else if (ttsBackend == "vulkan")
+    {
+        nvigiCtx.ttsId = nvigi::plugin::tts::asqflow_ggml::vulkan::kId;
+    }
+    else if (ttsBackend != "trt")
+    {
+        loggingPrint(nvigi::LogType::eWarn, ("Unknown tts backend '" + ttsBackend + "', defaulting to 'trt'\n").c_str());
+    }
+
     if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigiCtx.ttsId, &nvigiCtx.itts, ptr_nvigiLoadInterface)))
     {
         loggingPrint(nvigi::LogType::eError, "Could not query TTS interface");
         return -1;
+    }
+
+    //! Auto-select model GUID based on backend if not specified
+    std::string selectedGuid = guidTTS;
+    if (selectedGuid.empty())
+    {
+        if (nvigiCtx.ttsId == nvigi::plugin::tts::asqflow_trt::kId)
+        {
+            selectedGuid = "{81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F}";
+            loggingPrint(nvigi::LogType::eInfo, ("Auto-selecting TRT TTS model: " + selectedGuid + "\n").c_str());
+        }
+        else // GGML
+        {
+            selectedGuid = "{16EEB8EA-55A8-4F40-BECE-CE995AF44101}";
+            loggingPrint(nvigi::LogType::eInfo, ("Auto-selecting GGML TTS model: " + selectedGuid + "\n").c_str());
+        }
     }
 
     nvigi::TTSCreationParameters ttsParams{};
@@ -617,9 +672,7 @@ int InitTTS(const std::string& modelDir,
         ttsCommon.utf8PathToModels = modelDir.c_str();
         ttsCommon.numThreads = n_threads;
         ttsCommon.vramBudgetMB = vramBudgetMB;
-
-        //! Model is the same regardless of the backend
-        ttsCommon.modelGUID = guidTTS.c_str();
+        ttsCommon.modelGUID = selectedGuid.c_str();
         if (NVIGI_FAILED(result, ttsCommon.chain(ttsParams)))
         {
             loggingPrint(nvigi::LogType::eError, "TTS param chaining failed");
@@ -1023,10 +1076,12 @@ int main(int argc, char** argv)
     parser.add_command("", "targetPathSpectrogram", " target path of the spectrogram of the voice you want to clone", "", true);
     parser.add_command("", "extendedPhonemeDict", " path to the extendend phonemes dictionary for ASqFlow TTS model", "", false);
     parser.add_command("a", "audio", " audio file location", "", false); // used only for Linux
-    parser.add_command("", "gpt", " gpt mode, 'local' or 'cloud' (model GUID determines cloud endpoint)", "local");
+    parser.add_command("", "gpt", " gpt backend, 'cpu', 'cuda', 'vulkan', or 'cloud' (model GUID determines cloud endpoint)", "cuda");
     parser.add_command("", "gpt-guid", " gpt model guid in registry format", "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}");
+    parser.add_command("", "asr", " asr backend, 'cpu', 'cuda', or 'vulkan'", "cuda");
     parser.add_command("", "asr-guid", " asr model guid in registry format", "{5CAD3A03-1272-4D43-9F3D-655417526170}");
-    parser.add_command("", "tts-guid", " tts model guid in registry format (GGML: {16EEB8EA-55A8-4F40-BECE-CE995AF44101} TRT: {81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F})", "{16EEB8EA-55A8-4F40-BECE-CE995AF44101}");
+    parser.add_command("", "tts", " tts backend, 'cuda', 'vulkan', or 'trt'", "trt");
+    parser.add_command("", "tts-guid", " tts model guid in registry format (auto-selected based on backend if not specified)", "");
     parser.add_command("t", "token", " authorization token for the cloud provider", "");
     parser.add_command("", "vram", " the amount of vram to use in MB", "8192");
 
@@ -1071,22 +1126,24 @@ int main(int argc, char** argv)
     //! 
     {
         auto guidASR = parser.get("asr-guid");
-        if (InitASR(modelDir, guidASR, vramBudgetMB))
+        auto asrBackend = parser.get("asr");
+        if (InitASR(modelDir, asrBackend, guidASR, vramBudgetMB))
             return -1;
     }
 
     {
         auto guidGPT = parser.get("gpt-guid");
-        auto gptMode = parser.get("gpt");
+        auto gptBackend = parser.get("gpt");
         auto cloudToken = parser.get("token");
-        if (InitGPT(modelDir, gptMode, cloudToken, guidGPT, vramBudgetMB))
+        if (InitGPT(modelDir, gptBackend, cloudToken, guidGPT, vramBudgetMB))
             return -1;
     }
 
 #ifdef NVIGI_WINDOWS
     {
         auto guidTTS = parser.get("tts-guid");
-        if (InitTTS(modelDir, extendedPhonemeDict, guidTTS, vramBudgetMB))
+        auto ttsBackend = parser.get("tts");
+        if (InitTTS(modelDir, ttsBackend, extendedPhonemeDict, guidTTS, vramBudgetMB))
             return -1;
     }
 #endif

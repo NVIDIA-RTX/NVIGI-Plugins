@@ -24,7 +24,7 @@ Please read the [Programming Guide](nvigi_core/docs/ProgrammingGuide.md) located
 
 ### 1.1 MODERN C++ WRAPPER (RECOMMENDED)
 
-The NVIGI SDK provides modern C++ wrappers that simplify initialization and provide a cleaner API with RAII, `std::expected`, and builder patterns. The wrappers are located in `source/samples/nvigi.basic.cxx/` and can be used in your projects.
+The NVIGI SDK provides modern C++ wrappers that simplify initialization and provide a cleaner API with RAII, `std::expected`, and builder patterns. The wrappers are located in `source/samples/shared/cxx_wrappers/` and can be used in your projects.
 
 ```cpp
 #include "core.hpp"

@@ -19,7 +19,7 @@ This directory contains the main AI plugins for integrating In-Game Inferencing-
 
 ## Prerequisites
 
-| NVIGI version 1.4.0 | Minimum | Recommended |
+| NVIGI version 1.5.0 | Minimum | Recommended |
 |:--------------------|:--------|:------------|
 |GPU|RTX 30x0/A600|RTX 4080/4090 or RTX 5080/5090|
 |VRAM|8GB|12GB|

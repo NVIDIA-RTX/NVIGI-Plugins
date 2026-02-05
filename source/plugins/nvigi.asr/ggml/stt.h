@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 
@@ -200,6 +200,8 @@ public:
         buffer_.clear();
         buffer_.resize(bufferSize_, 0);
         writeIndex_ = readIndex_ = dataSize_ = 0;
+        // Reset stream type to initial state so next stream starts clean
+        streamType.store(-1);
     }
 
     void write(const std::vector<float>& pcmf32) {

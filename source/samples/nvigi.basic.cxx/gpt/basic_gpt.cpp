@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 
@@ -17,12 +17,12 @@ extern "C" __declspec(dllexport) const char* D3D12SDKPath = ".\\D3D12\\";
 #include "nvigi_vulkan.h"
 #include "nvigi_cloud.h"
 
-// C++ wrappers
-#include "clparser.hpp"
-#include "core.hpp"
-#include "d3d12.hpp"
-#include "vulkan.hpp"
-#include "gpt.hpp"
+// C++ wrappers (from shared location)
+#include "cxx_wrappers/clparser.hpp"
+#include "cxx_wrappers/core.hpp"
+#include "cxx_wrappers/d3d12.hpp"
+#include "cxx_wrappers/vulkan.hpp"
+#include "cxx_wrappers/gpt/gpt.hpp"
 
 using namespace nvigi::gpt;
 
@@ -45,7 +45,19 @@ int main(int argc, char** argv) {
             .add_command("", "vram", " the amount of vram to use in MB", "8192")
             .add_command("", "cache-type", " KV cache quantization type: fp16, fp32, q4_0, q8_0", "fp16")
             .add_command("", "log-level", " logging level 0-2", "0")
-            .add_command("", "print-system-info", " print system information", "");
+            .add_command("", "print-system-info", " print system information", "")
+            // Sampler parameters
+            .add_command("", "top-k", " top-k sampling (<=0 to use vocab size)", "40")
+            .add_command("", "min-p", " min-p sampling (0.0 = disabled)", "0.05")
+            .add_command("", "penalty-repeat", " repeat penalty (1.0 = disabled)", "1.0")
+            .add_command("", "penalty-freq", " frequency penalty (0.0 = disabled)", "0.0")
+            .add_command("", "penalty-present", " presence penalty (0.0 = disabled)", "0.0")
+            .add_command("", "penalty-last-n", " last n tokens to penalize (0 = disable, -1 = context size)", "64")
+            .add_command("", "mirostat", " mirostat sampling mode (0 = disabled, 1 = mirostat, 2 = mirostat 2.0)", "0")
+            .add_command("", "mirostat-tau", " mirostat target entropy", "5.0")
+            .add_command("", "mirostat-eta", " mirostat learning rate", "0.1")
+            .add_command("", "grammar", " BNF-like grammar to constrain sampling", "")
+            .add_command("", "persistent-kv", " persistent KV cache (keeps context between calls)", "");
         parser.parse(argc, argv);
 
         {
@@ -94,13 +106,23 @@ int main(int argc, char** argv) {
                 deviceAndQueue = nvigi::d3d12::D3D12Helper::create_best_compute_device();
                 d3d12_config = {
                     .device = deviceAndQueue.device.Get(),
-                    .command_queue = deviceAndQueue.compute_queue.Get(),
+                    .compute_queue = deviceAndQueue.compute_queue.Get(),
                     .create_committed_resource_callback = nvigi::d3d12::default_create_committed_resource,
                     .destroy_resource_callback = nvigi::d3d12::default_destroy_resource,
                     .create_resource_user_context = nullptr,
                     .destroy_resource_user_context = nullptr
                 };
             }
+
+            // Optional: Configure custom IO callbacks for loading models from memory, network, database, etc.
+            // See io_helpers.hpp and io_callbacks_example.hpp for details
+            // 
+            auto io_config = nvigi::io::create_file_wrapper_io(
+                       [](const char* path) {
+                           std::cout << "Opening: " << path << "\n";
+                           return true;  // Allow open
+                      }
+                   );
 
             // Create GPT instance
             std::unique_ptr<Instance> instance;
@@ -118,22 +140,61 @@ int main(int argc, char** argv) {
                 d3d12_config,
                 vk_config,
                 cloud_config,
+                io_config, // use {} for default file system loading, or pass custom IOConfig
                 core.loadInterface(),
                 core.unloadInterface(),
                 parser.get("plugin") // Optional custom plugin path, by default SDK location is used
             ).value(); // Will throw if creation fails
 
-            // Simple chat example, start chat with specific parameters
-            auto chat = instance->create_chat(
-                {
-                    .tokens_to_predict = 256,
-                    .batch_size = 2048,
-                    .temperature = 0.3f,
-                    .top_p = 0.8f,
-                    .interactive = true,
-                    .reverse_prompt = "\nAssistant:",
-                    .json_body = parser.get_file_or("json", "") // Optional custom JSON body for cloud requests, empty or file contents
-                });
+            // Configure sampler parameters from command-line options
+            SamplerConfig sampler;
+            sampler.set_top_k(parser.get_int("top-k"))
+                   .set_min_p(parser.get_float("min-p"))
+                   .set_penalty_repeat(parser.get_float("penalty-repeat"))
+                   .set_penalty_freq(parser.get_float("penalty-freq"))
+                   .set_penalty_present(parser.get_float("penalty-present"))
+                   .set_penalty_last_n(parser.get_int("penalty-last-n"))
+                   .set_mirostat(parser.get_int("mirostat"))
+                   .set_mirostat_tau(parser.get_float("mirostat-tau"))
+                   .set_mirostat_eta(parser.get_float("mirostat-eta"))
+                   .set_persistent_kv_cache(parser.has("persistent-kv"));
+
+            // Set grammar if provided
+            if (!parser.get("grammar").empty()) {
+                sampler.set_grammar(parser.get("grammar"));
+            }
+
+            // Print sampler configuration
+            std::cout << "\n=== Sampler Configuration ===\n";
+            std::cout << std::format("Top-K: {}\n", sampler.top_k);
+            std::cout << std::format("Min-P: {}\n", sampler.min_p);
+            std::cout << std::format("Penalty Repeat: {}\n", sampler.penalty_repeat);
+            std::cout << std::format("Penalty Frequency: {}\n", sampler.penalty_freq);
+            std::cout << std::format("Penalty Presence: {}\n", sampler.penalty_present);
+            std::cout << std::format("Penalty Last N: {}\n", sampler.penalty_last_n);
+            std::cout << std::format("Mirostat: {}\n", sampler.mirostat);
+            if (sampler.mirostat > 0) {
+                std::cout << std::format("Mirostat TAU: {}\n", sampler.mirostat_tau);
+                std::cout << std::format("Mirostat ETA: {}\n", sampler.mirostat_eta);
+            }
+            std::cout << std::format("Persistent KV Cache: {}\n", sampler.persistent_kv_cache ? "enabled" : "disabled");
+            if (!sampler.grammar.empty()) {
+                std::cout << std::format("Grammar: {}\n", sampler.grammar);
+            }
+            std::cout << "============================\n\n";
+
+            // Simple chat example, start chat with specific parameters including sampler config
+            RuntimeConfig runtime_config;
+            runtime_config.set_tokens(256)
+                          .set_batch_size(2048)
+                          .set_temperature(0.3f)
+                          .set_top_p(0.8f)
+                          .set_interactive(true)
+                          .set_reverse_prompt("\nAssistant:")
+                          .set_sampler(sampler)  // Attach our sampler configuration
+                          .set_json_body(parser.get_file_or("json", ""));  // Optional custom JSON body for cloud requests
+
+            auto chat = instance->create_chat(runtime_config);
 
             // Start operation (doesn't block!)
             auto op = chat.send_message_polled(

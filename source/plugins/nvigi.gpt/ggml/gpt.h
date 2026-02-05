@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 
@@ -584,13 +584,77 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
         // Was a global static in original code, can be a local scoped variable here.
         bool is_interacting = false;
         bool need_insert_eot = false;
-        // Make sure we don't leak sampler on early returns
-        extra::ScopedTasks cleanupOnReturn([smpl]()->void {
+        bool done_returned = false;
+        // Make sure we don't leak on early returns
+        extra::ScopedTasks cleanupOnReturn([sync, mem, ctx, smpl, &lock, &callback, &path_session, &params, &session_tokens, &done_returned]()->void {
+            // Begin NVIDIA Comment:  Any code that occurs after the while loop must go in here so that all of our 
+            // early returns clean up properly.
+
+            // Begin NVIDIA Modification
+            // This clears the conversation cache.  This allows us to have different conversations.
+            if (!sync->persistentKVCache)
+            {
+                llama_memory_clear(mem, true);
+            }
+            // End NVIDIA Modification
+
+            if (!path_session.empty() && params.prompt_cache_all && !params.prompt_cache_ro) {
+                LOG("\n%s: saving final output to session file '%s'\n", __func__, path_session.c_str());
+                llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
+            }
+
+            // Begin NVIDIA Modification
+            // Additional timing related storage for later retrieval
+            const auto timings = llama_perf_context(ctx);
+            
+            if (!done_returned) 
+            {
+                // `lock` should be declared before this lambda function to make sure it's destroyed after the this function is called when exiting the scope.
+                // If there is no callback we use result polling hence callback will block waiting for host to consume results
+                if (!sync->execCtx->callback) 
+                {
+                    // Unlock mutex so host thread can continue in evaluateAsync
+                    lock.unlock();
+                }
+                callback(sync->execCtx, 0, "", nvigi::kInferenceExecutionStateDone);
+                if (!sync->execCtx->callback) 
+                {
+                    // Lock it back
+                    lock.lock();
+                }
+                done_returned = true;
+            }
+
+            if (sync->tgLimiter)
+            {
+                auto currentTokensPerSecond = (int32_t)(1e3 / timings.t_eval_ms * timings.n_eval);
+                sync->tgLimiter->setCurrentTokensPerSec(currentTokensPerSecond);
+                NVIGI_LOG_VERBOSE("token gen limiter: current %d t/s | target %d t/s | sleep %.6f us", currentTokensPerSecond , (int32_t)sync->tgLimiter->getTargetTokensPerSec(), sync->tgLimiter->getSleepDurationUs());
+            }
+            // End NVIDIA Modification
+
+            // Begin NVIDIA Modification
+#ifndef NVIGI_PRODUCTION
+            reportStats(ctx, smpl);
+#endif
+            // We free the context and model in ggmlDestroyInstance instead.
+            // backend is freed in nvigiPluginDeregister
+            // nvigi doesn't use ggml_threadpools
+            //llama_free(ctx);
+            //llama_free_model(model);
+            // 
+            //llama_backend_free();
+            //
+            //ggml_threadpool_free(threadpool);
+            //ggml_threadpool_free(threadpool_batch);
+
+            // End NVIDIA Modification
+
             // Sampler has to die here, as perf reporting requires it earlier.  We create/delete every generate as runtime parameters could theoretically 
             // change the sampler parameters per evaluate call so we can't store sampler as an instance parameter.  
             // See gpt.cpp ggmlEvaluate runtimeParameters
             common_sampler_free(smpl);
-            });
+        });
 
         // End NVIDIA Modifications
 
@@ -1094,7 +1158,17 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
                     //LOG("%s", token_str.c_str());
                     if (input_echo)
                     {
+                        // If there is no callback we use result polling hence callback will block waiting for host to consume results
+                        if (!sync->execCtx->callback) {
+                            // Unlock mutex so host thread can continue in evaluateAsync
+                            lock.unlock();
+                        }
                         auto _res = callback(sync->execCtx, id, token_str, nvigi::kInferenceExecutionStateDataPending);
+                        if (!sync->execCtx->callback) {
+                            // Re-lock mutex before continuing generation
+                            lock.lock();
+                        }
+
                         if (_res == nvigi::kInferenceExecutionStateCancel || _res == nvigi::kInferenceExecutionStateInvalid)
                         {
                             // This is actually OK, not our error
@@ -1236,8 +1310,18 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
                     // End of turn, print performance stats
                     reportStats(ctx, smpl);
 #endif
-                    // inform user that we are done with our turn
+                    
+                    // If there is no callback we use result polling hence callback will block waiting for host to consume results
+                    if (!sync->execCtx->callback) {
+                        // Unlock mutex so host thread can continue in evaluateAsync
+                        lock.unlock();
+                    }
+                    // inform user that we are done with our turn (will block if polling results)
                     auto _res = callback(sync->execCtx, 0, "", nvigi::kInferenceExecutionStateDone);
+                    done_returned = true;
+                    if (!sync->execCtx->callback) {
+                        lock.lock();
+                    }
                     if (_res == nvigi::kInferenceExecutionStateCancel || _res == nvigi::kInferenceExecutionStateInvalid)
                     {
                         // This is OK, not an error, we got interrupted
@@ -1376,48 +1460,8 @@ int generate(InferenceContextSync* sync, llama_model* model, llama_context* ctx,
             }
         }
 
-        // Begin NVIDIA Modification
-        // This clears the conversation cache.  This allows us to have different conversations.
-        if (!sync->persistentKVCache)
-        {
-            llama_memory_clear(mem, true);
-        }
-        // End NVIDIA Modification
-
-        if (!path_session.empty() && params.prompt_cache_all && !params.prompt_cache_ro) {
-            LOG("\n%s: saving final output to session file '%s'\n", __func__, path_session.c_str());
-            llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
-        }
-
-        // Begin NVIDIA Modification
-        // Additional timing related storage for later retrieval
-        const auto timings = llama_perf_context(ctx);
-        callback(sync->execCtx, 0, "", nvigi::kInferenceExecutionStateDone);
-
-        if (sync->tgLimiter)
-        {
-            auto currentTokensPerSecond = (int32_t)(1e3 / timings.t_eval_ms * timings.n_eval);
-            sync->tgLimiter->setCurrentTokensPerSec(currentTokensPerSecond);
-            NVIGI_LOG_VERBOSE("token gen limiter: current %d t/s | target %d t/s | sleep %.6f us", currentTokensPerSecond , (int32_t)sync->tgLimiter->getTargetTokensPerSec(), sync->tgLimiter->getSleepDurationUs());
-        }
-        // End NVIDIA Modification
-
-        // Begin NVIDIA Modification
-#ifndef NVIGI_PRODUCTION
-        reportStats(ctx, smpl);
-#endif
-        // We free the context and model in ggmlDestroyInstance instead.
-        // backend is freed in nvigiPluginDeregister
-        // nvigi doesn't use ggml_threadpools
-        //llama_free(ctx);
-        //llama_free_model(model);
-        // 
-        //llama_backend_free();
-        //
-        //ggml_threadpool_free(threadpool);
-        //ggml_threadpool_free(threadpool_batch);
-
-        // End NVIDIA Modification
+        // Begin NVIDIA Comment - this is the start of generation EXIT.  We're out of the giant while loop now. End NVIDIA Comment.
+		// Any cleanup code should go in the cleanupOnReturn lambda above to ensure all exit paths cleanup properly.
     }
     catch (std::exception& e)
     {

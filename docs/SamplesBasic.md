@@ -2,8 +2,6 @@
 
 The basic sample, `nvigi.basic` shows the basics of running a workflow of WAV (microphone) audio -> ASR (speech recognition) -> GPT (LLM).  It is automatically built as a part of the SDK build.  It allows direct typing "to" the LLM or "talking to" the LLM via a microphone and ASR.
 
-**NOTE**: This sample makes use of a CUDA-based backend, and therefore will not work on non-NVIDIA hardware. This will be fixed in future releases.
-
 Because of the SDK layout, once the components are built they will be under the `_artifacts` tree; in order for the SDK to run an app like the sample, all of these DLLs and the executable must be in the same directory.  We do this by copying the DLLs and EXE into the `bin\x64` directory, and running the app from within that directory, so all plugins are available.
 
 Normally, whether the plugins have been built from a binary, "standard layout" app developer pack or from GitHub source, this is done via the `copy_sdk_binaries.bat`, whose use is described in the base documentation for the binary app developer pack or GitHub README.  The rest of this document assumes that the binaries are up to date and have been copied.
@@ -62,17 +60,25 @@ Here are the command line options:
 Usage: nvigi.basic [options]
 
   -m, --models              model repo location (REQUIRED)
-  --asr-guid                asr model guid in registry format (default: {5CAD3A03-1272-4D43-9F3D-655417526170})
+  --asr                     asr backend, 'cpu', 'cuda', or 'vulkan' (default: cuda)
+  --asr-guid                asr model guid in registry format, in quotes (default: "{5CAD3A03-1272-4D43-9F3D-655417526170}")
   -a, --audio               audio file location (default: )
   --extendedPhonemeDict     path to the extendend phonemes dictionary for ASqFlow TTS model
-  --gpt                     gpt mode, 'local' or 'cloud' - model GUID determines the cloud endpoint (default: local)
-  --gpt-guid                gpt model guid in registry format (default: {01F43B70-CE23-42CA-9606-74E80C5ED0B6})
+  --gpt                     gpt backend, 'cpu', 'cuda', 'vulkan', or 'cloud' - model GUID determines cloud endpoint (default: cuda)
+  --gpt-guid                gpt model guid in registry format, in quotes (default: "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}")
   -s, --sdk                 sdk location, (default: exe location)
   -t, --token               authorization token for the cloud provider (default: )
   --targetPathSpectrogram   target path of the spectrogram of the voice you want to clone
-  --tts-guid                gpt model guid in registry format (default: {81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F})
+  --tts                     tts backend, 'cuda', 'vulkan', or 'trt' (default: trt)
+  --tts-guid                tts model guid in registry format, in quotes (default: auto-selected based on backend)
   --vram                    the amount of vram to use in MB (default: 8192)
 ```
+
+**TTS Model Selection**: If `--tts-guid` is not specified, the sample will automatically select an appropriate model based on the `--tts` backend:
+  - TRT backend (`--tts trt`): Automatically uses `{81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F}`
+  - GGML backends (`--tts cuda` or `--tts vulkan`): Automatically uses `{16EEB8EA-55A8-4F40-BECE-CE995AF44101}`
+
+If you specify a custom `--tts-guid`, ensure it is compatible with your chosen backend. Using mismatched backend/model pairs will result in errors.
 
 ## Run in Debugger
 

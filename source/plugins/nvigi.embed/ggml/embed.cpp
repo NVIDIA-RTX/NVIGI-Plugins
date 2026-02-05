@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 #pragma once
@@ -146,6 +146,8 @@ nvigi::InferenceExecutionState ggmlReturnOutputEmbedding(nvigi::InferenceExecuti
         }
 
         memcpy_s((float*)(cpuBuffer->buffer), cpuBuffer->sizeInBytes, &(embedding[0]), embedding.size() * sizeof(float));
+
+        res = execCtx->callback(execCtx, nvigi::kInferenceExecutionStateDone, execCtx->callbackUserData);
     }
     else
     {
@@ -154,8 +156,9 @@ nvigi::InferenceExecutionState ggmlReturnOutputEmbedding(nvigi::InferenceExecuti
         std::vector<nvigi::InferenceDataSlot> slots = { {kEmbedDataSlotOutEmbedding, responseSlot}};
         nvigi::InferenceDataSlotArray outputs = { slots.size(), slots.data() };
         execCtx->outputs = &outputs;
+
+        res = execCtx->callback(execCtx, nvigi::kInferenceExecutionStateDone, execCtx->callbackUserData);
     }
-    res = execCtx->callback(execCtx, nvigi::kInferenceExecutionStateDone, execCtx->callbackUserData);
 
     //! Clear outputs since these are all local variables
     execCtx->outputs = {};
@@ -430,13 +433,20 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
             llama_get_cuda_streams(instanceData->llama_init.context.get(), (void**)instanceData->cuda_streams.data(), stream_count);
 
 
-            if (ctx.icig->getVersion() >= 2)
+            if (instanceData->cudaContext.usingCiG && ctx.icig->getVersion() >= 2)
             {
                 // Apply the global priority to all streams
                 nvigi::Result cuerr = ctx.icig->cudaApplyGlobalGpuInferenceSchedulingMode(instanceData->cuda_streams.data(), instanceData->cuda_streams.size());
                 if (cuerr != kResultOk)
                 {
-                    NVIGI_LOG_WARN("Could not set relative priority of compute and graphics. Please use 575 driver or higher\n");
+                    if (cuerr == kResultDriverOutOfDate)
+                    {
+                        NVIGI_LOG_WARN_ONCE("Could not set relative priority of CUDA compute and graphics because the driver is out of date\n");
+                    }
+                    else
+                    {
+                        NVIGI_LOG_ERROR("Could not set relative priority of CUDA compute and graphics because a CUDA error occurred.\n");
+                    }
                 }
             }
 #endif
@@ -615,12 +625,19 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx)
     // We apply the global scheduling mode to our streams at every evaluate() 
     // to reflect any changes the user made to the global mode between calls
 
-    if (ctx.icig->getVersion() >= 2)
+    if (instance->cudaContext.usingCiG && ctx.icig->getVersion() >= 2)
     {
         nvigi::Result err = ctx.icig->cudaApplyGlobalGpuInferenceSchedulingMode(instance->cuda_streams.data(), instance->cuda_streams.size());
         if (err != kResultOk)
         {
-            NVIGI_LOG_WARN_ONCE("Could not set relative priority of compute and graphics, insufficient driver\n");
+            if (err == kResultDriverOutOfDate)
+            {
+                NVIGI_LOG_WARN_ONCE("Could not set relative priority of CUDA compute and graphics because the driver is out of date\n");
+            }
+            else
+            {
+                NVIGI_LOG_ERROR("Could not set relative priority of CUDA compute and graphics because a CUDA error occurred.\n");
+            }
         }
     }
 #endif

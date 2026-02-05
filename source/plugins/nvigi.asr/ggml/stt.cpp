@@ -1,8 +1,12 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 
 #include <future>
+
+// premake determines the include path
+#include <whisper.h>
+
 #include "source/core/nvigi.api/nvigi.h"
 #include "source/core/nvigi.log/log.h"
 #include "source/core/nvigi.exception/exception.h"
@@ -16,10 +20,10 @@
 #include "source/utils/nvigi.poll/poll.h"
 #include "_artifacts/gitVersion.h"
 #include "external/json/source/nlohmann/json.hpp"
-#include "external/whisper.cpp/include/whisper.h"
 #include "source/plugins/nvigi.asr/ggml/stt.h"
 #include "source/utils/nvigi.ai/ai_data_helpers.h"
 #include "source/utils/nvigi.hwi/cuda/runtime_context_scope.h"
+
 
 using json = nlohmann::json;
 
@@ -41,10 +45,28 @@ namespace nvigi {
     // this should match the PFun_commandListAction defined in WhisperCPP - redefining as it's at a depth/scope in WhisperCPP not exposed to IGI
     using PFun_commandListAction = void(ID3D12CommandList* pCommandList, int action);
 }
-extern void ggml_d3d12_set_params(ID3D12Device* device, ID3D12CommandQueue* cmd_queue_direct,
-    ID3D12CommandQueue* cmd_queue_compute, ID3D12CommandQueue* cmd_queue_copy,
-    nvigi::PFun_createCommittedResource* createCommittedResource, nvigi::PFun_destroyResource* destroyResource,
-    void* userContextCreate, void* userContextDestroy, bool allowReBAR, nvigi::PFun_commandListAction* commandListAction);
+struct ggml_d3d12_ctx
+{
+    ID3D12Device* device = nullptr;
+    ID3D12CommandQueue* cmd_queue_direct = nullptr;
+    ID3D12CommandQueue* cmd_queue_compute = nullptr;
+    ID3D12CommandQueue* cmd_queue_copy = nullptr;
+    nvigi::PFun_createCommittedResource* createCommittedResource = nullptr;
+    nvigi::PFun_destroyResource* destroyResource = nullptr;
+    nvigi::PFun_commandListAction* commandListAction = nullptr;
+    void* userContextCreate = nullptr;
+    void* userContextDestroy = nullptr;
+    bool allowReBAR = true;
+    // IMPORTANT: Some kernels can read/write beyond the actual buffer size so we fix this with padding.
+    // 
+    // Why? Because fixing this in kernels with if/else is expensive and using descriptor tables adds overhead (root uav/srv with no bound checks are fastest).
+    uint64_t bufferPadBytes = 0;
+    uint32_t maxDescriptorSets = 32 * 1024;
+    uint32_t constantBufferSize = 1024 * 256;
+    uint32_t coreCount = 0;
+    uint32_t architecture = 0;
+};
+extern void ggml_d3d12_set_params(const ggml_d3d12_ctx& ctx);
 #elif defined GGML_USE_VULKAN
 #include "external/vulkanSDK/include/vulkan/vulkan.h"
 #include "source/core/nvigi.api/nvigi_vulkan.h"
@@ -129,6 +151,7 @@ struct InferenceContext
     std::future<Result> job;
     std::atomic<bool> running = true;
     std::atomic<bool> cancelled = false;  // Flag to request early cancellation
+    int n_iter = 0;  // Iteration counter for sliding window mode (matches whisper.cpp stream.cpp)
 
 #if GGML_USE_CUBLAS
     // Used to set the relative priority of GPU inference and graphics
@@ -202,8 +225,8 @@ struct ASRContext
     nvigi::IHWICuda* icig{};
 #elif defined(GGML_USE_D3D12)
     nvigi::IHWID3D12* iscg{};
-    nvigi::system::ISystem* isystem{};
 #endif
+    nvigi::system::ISystem* isystem{};
 };
 
 nvigi::Result evaluate(nvigi::InferenceExecutionContext* execCtx);
@@ -220,29 +243,36 @@ nvigi::Result flushAndTerminate(nvigi::asr::InferenceContext* instance)
     auto result = nvigi::kResultOk;
     if (instance->job.valid())
     {
-        // Release any results that are pending
-        if (instance->pollCtx.checkResultPending())
-        {
-            instance->pollCtx.releaseResults(nvigi::kInferenceExecutionStateDone);
-        }
-        
         // Signal the async job to stop
         instance->running.store(false);
-        
-        // Wait for the job to complete with timeout
-        auto futureResult = instance->job.wait_for(std::chrono::seconds(10));
-        if (futureResult == std::future_status::ready)
+        instance->cancelled.store(true);
+
+        // Keep draining results while waiting for job to complete
+        auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (std::chrono::steady_clock::now() < timeout)
         {
-            if (NVIGI_FAILED(result, instance->job.get()))
+            // Release any pending results to unblock the background thread
+            if (instance->pollCtx.checkResultPending())
             {
-                return result;
+                instance->pollCtx.releaseResults(nvigi::kInferenceExecutionStateDone);
+            }
+
+            // Check if job is done
+            auto futureResult = instance->job.wait_for(std::chrono::milliseconds(10));
+            if (futureResult == std::future_status::ready)
+            {
+                // Job completed, get the result
+                if (NVIGI_FAILED(result, instance->job.get()))
+                {
+                    return result;
+                }
+                return kResultOk;
             }
         }
-        else
-        {
-            NVIGI_LOG_WARN("Async job timed out.");
-            return kResultTimedOut;
-        }
+
+        // Timed out
+        NVIGI_LOG_WARN("Async job timed out.");
+        return kResultTimedOut;
     }
     return result;
 }
@@ -405,12 +435,12 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
                 return res;
             }
 
-            VendorId vendor{};
-            if (NVIGI_FAILED(res, d3d12::getDeviceVendor(d3d12Params, ctx.isystem, vendor)))
+            system::Adapter* adapter{};
+            if (NVIGI_FAILED(res, d3d12::getDeviceAdapter(d3d12Params, ctx.isystem, &adapter)))
             {
                 return res;
             }
-            if (vendor == VendorId::eNVDA)
+            if (adapter->vendor == VendorId::eNVDA)
             {
                 if (!ctx.iscg && !framework::getInterface(plugin::getContext()->framework, plugin::hwi::d3d12::kId, &ctx.iscg))
                 {
@@ -455,8 +485,24 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
             }
 
             bool allowReBAR = d3d12Params->getVersion() < 3 || !(d3d12Params->flags & nvigi::D3D12ParametersFlags::eDisableReBAR);
-            ggml_d3d12_set_params(d3d12Params->device, d3d12Params->queue, d3d12Params->queueCompute, d3d12Params->queueCopy,
-                d3d12Params->createCommittedResourceCallback, d3d12Params->destroyResourceCallback, d3d12Params->createCommitResourceUserContext, d3d12Params->destroyResourceUserContext, allowReBAR, CLresetCallback);
+            ggml_d3d12_ctx d3d12GGMLParams = {
+                d3d12Params->device,
+                d3d12Params->queue,
+                d3d12Params->queueCompute,
+                d3d12Params->queueCopy,
+                d3d12Params->createCommittedResourceCallback,
+                d3d12Params->destroyResourceCallback,
+                CLresetCallback,
+                d3d12Params->createCommitResourceUserContext,
+                d3d12Params->destroyResourceUserContext,
+                allowReBAR,
+                0, // bufferPadBytes
+                32 * 1024, // maxDescriptorSets
+                256 * 1024, // constantBufferSize
+                adapter->coreCount,
+                adapter->architecture
+            };
+            ggml_d3d12_set_params(d3d12GGMLParams);
 
 #endif
             struct whisper_context_params cparams = whisper_context_default_params();
@@ -538,7 +584,14 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
                 nvigi::Result cuerr = ctx.icig->cudaApplyGlobalGpuInferenceSchedulingMode(instanceData->cuda_streams.data(), instanceData->cuda_streams.size());
                 if (cuerr != kResultOk)
                 {
-                    NVIGI_LOG_WARN_ONCE("Could not set relative priority of compute and graphics. Please use 575 driver or higher\n");
+                    if (cuerr == kResultDriverOutOfDate)
+                    {
+                        NVIGI_LOG_WARN_ONCE("Could not set relative priority of CUDA compute and graphics because the driver is out of date\n");
+                    }
+                    else
+                    {
+                        NVIGI_LOG_ERROR("Could not set relative priority of CUDA compute and graphics because a CUDA error occurred.\n");
+                    }
                 }
             }
 #endif
@@ -590,8 +643,8 @@ nvigi::Result whisperGetCapsAndRequirements(nvigi::NVIGIParameter** _info, const
         return kResultInvalidParameter;
     }
 
-    // Supported languages
-    static const char* s_languages[] = { "auto" };
+    // Supported languages, must be null terminated since we don't provide a size
+    static const char* s_languages[] = { "auto", nullptr };
     info->supportedLanguages = s_languages;
 
     // CUDA or CPU backend
@@ -713,7 +766,14 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
         nvigi::Result err = ctx.icig->cudaApplyGlobalGpuInferenceSchedulingMode(instance->cuda_streams.data(), instance->cuda_streams.size());
         if (err != kResultOk)
         {
-            NVIGI_LOG_WARN_ONCE("Could not set relative priority of compute and graphics, insufficient driver\n");
+            if (err == kResultDriverOutOfDate)
+            {
+                NVIGI_LOG_WARN_ONCE("Could not set relative priority of CUDA compute and graphics because the driver is out of date\n");
+            }
+            else
+            {
+                NVIGI_LOG_ERROR("Could not set relative priority of CUDA compute and graphics because a CUDA error occurred.\n");
+            }
         }
     }
 #endif
@@ -746,8 +806,16 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
 
     if (streamType == kStreamTypeNone || streamType == StreamSignal::eStreamSignalStart)
     {
+        if (async && streamType == kStreamTypeNone)
+        {
+            NVIGI_LOG_ERROR("In async mode, stream signal cannot be 'kStreamTypeNone' and must be provided in StreamingParameters");
+            return kResultInvalidState;
+        }
         static const char* s_strategy[] = { "ASRSamplingStrategy::eGreedy","ASRSamplingStrategy::eBeamSearch" };
         NVIGI_LOG_VERBOSE("Processing audio on %u threads - strategy '%s' - best of %d - beam size %d", params.n_threads, s_strategy[strategy], params.best_of, params.beam_size);
+        
+        // Reset iteration counter when stream starts
+        instance->n_iter = 0;        
     }
 
     // Convert to fp32
@@ -767,38 +835,119 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
     {
         auto& params = instance->params;
 
+        // IMPORTANT: Read streamType fresh each iteration to pick up changes made by new chunks
         auto streamType = (StreamSignal)instance->audio.getStreamType();
         bool noMoreData = false;
         bool finalSegment = false;
+        auto bufferSize = instance->audio.getDataSize();
+       
+        
+        // If no data in buffer and still streaming, wait longer before checking again
+        // This reduces spinning when chunks arrive slowly
+        if (bufferSize == 0 && streamType != StreamSignal::eStreamSignalStop && streamType != kStreamTypeNone)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            return kResultOk;
+        }
+        
         if (streamType != kStreamTypeNone)
         {
-            if (instance->audio.read(instance->pcmf32_new, params.step_ms, noMoreData))
+            bool hasData = instance->audio.read(instance->pcmf32_new, params.step_ms, noMoreData);
+            if (hasData)
             {
+                // Calculate how much old audio to keep (mimicking whisper.cpp stream.cpp logic)
+                // This prevents audio from growing unbounded and improves accuracy
+                const int n_samples_new = (int)instance->pcmf32_new.size();
+                const int n_samples_keep = (params.keep_ms * WHISPER_SAMPLE_RATE) / 1000;
+                const int n_samples_len = (params.length_ms * WHISPER_SAMPLE_RATE) / 1000;
+                
+                // Take up to params.length_ms audio from previous iteration
+                const int n_samples_take = std::min(
+                    (int)instance->pcmf32_old.size(), 
+                    std::max(0, n_samples_keep + n_samples_len - n_samples_new)
+                );
+                
+                
+                // Build the audio buffer: old tail + new data
                 instance->pcmf32.clear();
-                instance->pcmf32.insert(instance->pcmf32.end(),instance->pcmf32_old.begin(), instance->pcmf32_old.end());
-                instance->pcmf32.insert(instance->pcmf32.end(), instance->pcmf32_new.begin(), instance->pcmf32_new.end());
-                if (instance->pcmf32.size() < 2*WHISPER_SAMPLE_RATE)
+                instance->pcmf32.reserve(n_samples_take + n_samples_new);
+                
+                if (n_samples_take > 0) {
+                    // Take only the tail of old audio (for context continuity)
+                    instance->pcmf32.insert(instance->pcmf32.end(), 
+                        instance->pcmf32_old.end() - n_samples_take, 
+                        instance->pcmf32_old.end());
+                }
+                
+                instance->pcmf32.insert(instance->pcmf32.end(), 
+                    instance->pcmf32_new.begin(), 
+                    instance->pcmf32_new.end());
+
+                // Sliding window mode 
+                // NO VAD! Just process every step_ms worth of audio
+                // Results are interim (DataPartial) until we decide to finalize them
+                
+                // Check minimum audio length - wait until we have at least step_ms worth
+                const int n_samples_step = (params.step_ms * WHISPER_SAMPLE_RATE) / 1000;
+                if ((int)instance->pcmf32.size() < n_samples_step && !noMoreData)
                 {
-                    // Minimum 1sec of samples needed
+                    // Not enough audio yet and not final - accumulate more
                     instance->pcmf32_old.insert(instance->pcmf32_old.end(), instance->pcmf32_new.begin(), instance->pcmf32_new.end());
                     return kResultOk;
                 }
                 
-                // Final segment if we detect silence at the end
-                finalSegment = vad_simple(instance->pcmf32, WHISPER_SAMPLE_RATE, params.step_ms / 2, params.vad_thold, params.freq_thold, false);
-                if (finalSegment)
+                // We have enough audio to process
+                // finalSegment is ONLY true when stream actually ends (noMoreData)
+                finalSegment = noMoreData;                
+            }
+            else if (!noMoreData)
+            {
+                // No data available and not at end - this should rarely happen now
+                // because we check buffer size upfront and sleep 50ms if empty
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                return kResultOk;
+            }
+            else
+            {
+                // hasData=false and noMoreData=true
+                // Check if we have accumulated audio that needs processing
+                if (!instance->pcmf32.empty() || !instance->pcmf32_old.empty())
                 {
-                    instance->pcmf32_old.clear();
+                    // We have accumulated audio from previous iteration(s) that hasn't been processed yet
+                    // This can happen when chunks arrived but weren't enough for minimum processing
+                    // Merge any remaining old data and process it as the final segment
+                    if (!instance->pcmf32_old.empty() && instance->pcmf32.empty())
+                    {
+                        instance->pcmf32 = std::move(instance->pcmf32_old);
+                    }
+                    else if (!instance->pcmf32_old.empty())
+                    {
+                        instance->pcmf32.insert(instance->pcmf32.end(), 
+                            instance->pcmf32_old.begin(), instance->pcmf32_old.end());
+                        instance->pcmf32_old.clear();
+                    }
+                    
+                    finalSegment = true;
+                    // Continue to process below
                 }
                 else
                 {
-                    instance->pcmf32_old.insert(instance->pcmf32_old.end(),instance->pcmf32_new.begin(), instance->pcmf32_new.end());
+                    // No data to process, stream already finalized in previous iteration
+                    
+                    // Trigger final Done callback with empty text to signal completion
+                    triggerCallback(execCtx, "", nvigi::kInferenceExecutionStateDone);
+                    
+                    // Clean up and stop the loop
+                    instance->audio.clear();
+                    instance->n_iter = 0;  // Reset iteration counter
+                    instance->running.store(false);
+                    return kResultOk;
                 }
             }
         }
         else
         {
-            // Read everything
+            // Read everything in non-async mode
             instance->audio.read(instance->pcmf32, kAvailableAudioBufferSize, noMoreData);
             finalSegment = true;
         }
@@ -874,43 +1023,100 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
             }
 
             const int n_segments = whisper_full_n_segments(instance->model);
+            
+            // Increment iteration counter (matches whisper.cpp line 406)
+            instance->n_iter++;
+            
+            // Calculate n_new_line (matches whisper.cpp line 139)
+            // This determines how often to "finalize" a line (print \n instead of \r)
+            const int n_new_line = std::max(1, params.length_ms / params.step_ms - 1);
+            
+            // Check if this iteration should finalize the line
+            // In whisper.cpp: if ((n_iter % n_new_line) == 0) printf("\n");
+            bool shouldFinalizeLine = (instance->n_iter % n_new_line) == 0;
+            
             for (int i = 0; i < n_segments; ++i)
             {
                 // Check for cancellation request
                 if (instance->cancelled.load())
                 {
                     NVIGI_LOG_VERBOSE("ASR segment processing cancelled by user request");
+                    triggerCallback(execCtx, "", nvigi::kInferenceExecutionStateCancel);
                     return kResultOk;
                 }
                 
                 const char* text = whisper_full_get_segment_text(instance->model, i);
-                // NOTE: In non production we send stats later with state set to done
-                nvigi::InferenceExecutionState state = finalSegment ? nvigi::kInferenceExecutionStateDataPending : nvigi::kInferenceExecutionStateDataPartial;
-#ifdef NVIGI_PRODUCTION
-                // If last segment and no streaming or last chunk in a stream report done
-                if (i == n_segments - 1 && noMoreData)
+                
+                // State logic for sliding window mode (like whisper.cpp !use_vad, line 349-370, 408):
+                // 
+                // - DataPartial: Interim results (whisper.cpp prints with \r to overwrite)
+                //   Used for all iterations EXCEPT when finalizing
+                // 
+                // - DataPending: Finalized phrase (whisper.cpp prints \n for new line)
+                //   Used when (n_iter % n_new_line) == 0 OR when stream ends
+                // 
+                // - Done: Stream completely finished (noMoreData)
+                //   Sent separately after all segments
+                nvigi::InferenceExecutionState state;
+                
+                if (noMoreData)
                 {
-                    state = nvigi::kInferenceExecutionStateDone;
-                    instance->audio.clear();
-                    instance->pcmf32.clear();
-                    instance->pcmf32_new.clear();
-                    instance->pcmf32_old.clear();
+                    // Stream ended completely - finalize with DataPending
+                    // (Done state sent separately in cleanup code)
+                    state = nvigi::kInferenceExecutionStateDataPending;                    
                 }
-#endif
+                else if (shouldFinalizeLine)
+                {
+                    // Every n_new_line iterations - finalize the current line
+                    state = nvigi::kInferenceExecutionStateDataPending;
+                }
+                else
+                {
+                    // Interim result - will be overwritten next iteration
+                    state = nvigi::kInferenceExecutionStateDataPartial;
+                }
+                
                 triggerCallback(execCtx, text, state);
             }
+            
+            // This creates overlapping windows normally, then "jumps forward" on finalize            
+            if (!noMoreData)
+            {
+                // STEP 1: Always save full processed audio (matches whisper.cpp line 291)
+                instance->pcmf32_old = instance->pcmf32;
+                
+                // STEP 2: On finalize iterations, REPLACE with tail only (matches line 412)
+                if (shouldFinalizeLine)
+                {
+                    const int n_samples_keep = (params.keep_ms * WHISPER_SAMPLE_RATE) / 1000;
+                    if ((int)instance->pcmf32.size() > n_samples_keep)
+                    {
+                        instance->pcmf32_old.assign(
+                            instance->pcmf32.end() - n_samples_keep, 
+                            instance->pcmf32.end()
+                        );                
+                    }
+                }
+            }
         }
-
-#ifndef NVIGI_PRODUCTION
+        else
+        {
+            NVIGI_LOG_VERBOSE("==> [INFERENCE] No audio to process (empty buffer)");
+        }
+        
+        // Stop loop when stream ends
         if (noMoreData)
         {
             instance->audio.clear();
             instance->pcmf32_old.clear();
             instance->pcmf32.clear();
             instance->pcmf32_new.clear();
+            instance->n_iter = 0;  // Reset iteration counter for next stream
             
             triggerCallback(execCtx, "", nvigi::kInferenceExecutionStateDone);
 
+#ifndef NVIGI_PRODUCTION
+            // Log timing information in non-production builds only
             auto timings = whisper_get_timings(instance->model);
 
             NVIGI_LOG_INFO("timings:sample %.2fms", timings->sample_ms);
@@ -920,8 +1126,12 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
             NVIGI_LOG_INFO("timings:batchd  %.2fms", timings->batchd_ms);
 
             delete timings;
-        }
 #endif
+            
+            // Stop the async loop after processing the complete stream
+            // The loop will restart when a new stream begins
+            instance->running.store(false);            
+        }
         return kResultOk;
     };
 
@@ -977,6 +1187,21 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
                     }
                     return res;
                 });
+            }
+            else
+            {
+                // Previous job is still running - this shouldn't happen in normal operation
+                // This indicates the previous stream didn't send the final chunk with is_last=true
+                // or there's a thread leak. We need to handle this gracefully.
+                // Check if this is a new stream starting (eStreamSignalStart)
+                assert(streamType != StreamSignal::eStreamSignalStart);
+                if (streamType == StreamSignal::eStreamSignalStart)
+                {
+                    NVIGI_LOG_ERROR("Previous job NOT READY (still running) but new stream started, signal='StreamSignal::eStreamSignalStart', running=%s, cancelled=%s", 
+                        instance->running.load() ? "true" : "false",
+                        instance->cancelled.load() ? "true" : "false");
+                    return kResultInvalidState;
+                }
             }
         }
     }
@@ -1109,6 +1334,26 @@ Result nvigiPluginGetInfo(nvigi::framework::IFramework* framework, nvigi::plugin
     info.minGPUArch = {};
     info.minDriver = {};
 
+    if (!framework::getInterface(framework, nvigi::core::framework::kId, &ctx.isystem))
+    {
+        NVIGI_LOG_ERROR("Missing interface from 'nvigi.plugin.hwi.cuda'");
+        return kResultInvalidState;
+    }
+
+    // Check if we have an NV adapter available and if so, set the minimum GPU architecture and driver version
+    bool hasNVAdapter = false;
+    const nvigi::system::SystemCaps* caps = ctx.isystem->getSystemCaps();
+    for (uint32_t i = 0; i < caps->adapterCount; i++)
+    {
+        const nvigi::system::Adapter* adapter = caps->adapters[i];
+        if (adapter->vendor == VendorId::eNVDA)
+        {
+            hasNVAdapter = true;
+            break;
+        }
+        // Later, we could add min driver and arch for AMD or other vendors
+    }
+
 #ifdef GGML_USE_CUBLAS
     info.minDriver = { NVIGI_CUDA_MIN_DRIVER_MAJOR, NVIGI_CUDA_MIN_DRIVER_MINOR, NVIGI_CUDA_MIN_DRIVER_BUILD };
     info.minGPUArch = { NVIGI_CUDA_MIN_GPU_ARCH };
@@ -1121,42 +1366,21 @@ Result nvigiPluginGetInfo(nvigi::framework::IFramework* framework, nvigi::plugin
         return kResultInvalidState;
     }
 
-    const nvigi::system::SystemCaps* caps = isystem->getSystemCaps();
-    if (caps && caps->driverVersion.major < 580)
+    if (hasNVAdapter && caps->driverVersion.major < 580)
     {
         NVIGI_LOG_WARN_ONCE("CUDA backend recommends driver version 580 or higher, current version is %d.%d.%d - see documentation for details", caps->driverVersion.major, caps->driverVersion.minor, caps->driverVersion.build);
 	}
-
-    // Must release, as we may not have the chance to release it later if we are not registered
-    framework::releaseInterface(plugin::getContext()->framework, nvigi::core::framework::kId, isystem);
 #elif defined(GGML_USE_D3D12)
-    if (!framework::getInterface(framework, nvigi::core::framework::kId, &ctx.isystem))
-    {
-        NVIGI_LOG_ERROR("Missing interface from 'nvigi.plugin.hwi.cuda'");
-        return kResultInvalidState;
-    }
-
     // Default to any adapter and no driver restrictions
     info.requiredVendor = VendorId::eAny;
 
-    // Check if we have an NV adapter available and if so, set the minimum GPU architecture and driver version
-    const nvigi::system::SystemCaps* caps = ctx.isystem->getSystemCaps();
-    for (uint32_t i = 0; i < caps->adapterCount; i++)
+    if (hasNVAdapter)
     {
-        const nvigi::system::Adapter* adapter = caps->adapters[i];
-        if (adapter->vendor == VendorId::eNVDA)
-        {
-            info.minGPUArch = { NVIGI_CUDA_MIN_GPU_ARCH };
-            info.minDriver = { NVIGI_D3D12_MIN_DRIVER_MAJOR, NVIGI_D3D12_MIN_DRIVER_MINOR, NVIGI_D3D12_MIN_DRIVER_BUILD };
-            info.requiredVendor = VendorId::eNVDA;
-            break;
-        }
-        // Later, we could add min driver and arch for AMD or other vendors
+        info.minGPUArch = { NVIGI_CUDA_MIN_GPU_ARCH };
+        info.minDriver = { NVIGI_D3D12_MIN_DRIVER_MAJOR, NVIGI_D3D12_MIN_DRIVER_MINOR, NVIGI_D3D12_MIN_DRIVER_BUILD };
+        info.requiredVendor = VendorId::eNVDA;
     }
-
-    // Must release, as we may not have the chance to release it later if we are not registered
-    framework::releaseInterface(plugin::getContext()->framework, nvigi::core::framework::kId, ctx.isystem);
-    ctx.isystem = nullptr;
+    // Later, we could add min driver and arch for AMD or other vendors
 #elif defined(GGML_USE_VULKAN)
     // Requires SOME GPU with Vulkan support, no specific vendor or driver version
     info.requiredVendor = VendorId::eAny;
@@ -1164,6 +1388,10 @@ Result nvigiPluginGetInfo(nvigi::framework::IFramework* framework, nvigi::plugin
     // No requirements for CPU backend
     info.requiredVendor = nvigi::VendorId::eNone;
 #endif
+
+    // Must release, as we may not have the chance to release it later if we are not registered
+    framework::releaseInterface(plugin::getContext()->framework, nvigi::core::framework::kId, ctx.isystem);
+    ctx.isystem = nullptr;
 
     return kResultOk;
 }

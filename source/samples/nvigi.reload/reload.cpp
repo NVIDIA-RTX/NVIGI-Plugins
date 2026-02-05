@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
 
@@ -688,16 +688,32 @@ int main(int argc, char** argv)
     if (InitNVIGI(pathToSDKUtf8))
         return -1;
 
+    std::cout << "\n=== NVIGI Reload Sample ===\n";
+    std::cout << "Note: nvidia-smi and the Windows task manager GPU memory trackers may not" << std::endl;
+    std::cout << "      indicate a drop in allocated VRAM when switching between models.  This" << std::endl;
+    std::cout << "      is because D3D still keeps the block of memory allocated at the system" << std::endl;
+    std::cout << "      level, but the memory is now available for OTHER D3D usage" << std::endl;
+    std::cout << "Enter a text query to chat with the current LLM model" << std::endl;
+    std::cout << "Type <unload> to unload the current models from VRAM" << std::endl;
+    std::cout << "Type <llama3> to switch to (and load if need be) the LLama3 model" << std::endl;
+    std::cout << "Type <nemotron> to switch to (and load if need be) the Nemotron model" << std::endl;
+
     //////////////////////////////////////////////////////////////////////////////
     //! Init Plugin Interfaces and Instances
     //! 
     {
         LogVRAM("Pre-model loading");
         if (InitGPT(modelDir, "llama3", "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}", vramBudgetMB))
+        {
+            std::cout << "Error loading LLama3 model" << std::endl;
             return -1;
+        }
         LogVRAM("Post-llama3 loading");
         if (InitGPT(modelDir, "nemotron", "{8E31808B-C182-4016-9ED8-64804FF5B40D}", vramBudgetMB))
+        {
+            std::cout << "Error loading Nemotron model" << std::endl;
             return -1;
+        }
         LogVRAM("Post nemotron loading");
     }
 

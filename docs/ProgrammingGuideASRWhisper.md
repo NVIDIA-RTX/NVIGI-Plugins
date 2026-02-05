@@ -20,7 +20,7 @@ Please read the [Programming Guide](nvigi_core/docs/ProgrammingGuide.md) located
 
 ### 1.1 MODERN C++ WRAPPER (RECOMMENDED)
 
-The NVIGI SDK provides modern C++ wrappers that simplify initialization and provide a cleaner API with RAII, `std::expected`, and builder patterns. The wrappers are located in `source/samples/nvigi.basic.cxx/` and can be used in your projects.
+The NVIGI SDK provides modern C++ wrappers that simplify initialization and provide a cleaner API with RAII, `std::expected`, and builder patterns. The wrappers are located in `source/samples/shared/cxx_wrappers/` and can be used in your projects.
 
 ```cpp
 #include "core.hpp"
@@ -610,6 +610,7 @@ while (true) {
     
     if (!chunk_data.empty()) {
         // Send chunk async (non-blocking!)
+        // If this call can be made from multiple threads, ensure calls do not overlap via a mutex
         auto op = stream.send_audio_async(
             chunk_data.data(),
             chunk_data.size(),
@@ -637,7 +638,7 @@ auto audioData = AudioRecorder::StopRecording(recording);
 **Key Features:**
 - `transcribe()` - Blocking transcription with callbacks
 - `create_stream()` - Real-time streaming with automatic chunk management
-- `send_audio_async()` - Non-blocking audio processing
+- `send_audio_async()` - Non-blocking audio processing (note that this function is not thread safe.  The app must not allow calls to overlap)
 - Builder pattern for runtime configuration
 - RAII resource management
 

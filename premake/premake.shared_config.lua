@@ -3,7 +3,7 @@
 	-- _ACTION is the argument you passed into premake5 when you ran it.
 	local project_action = "UNDEFINED"
 	if _ACTION ~= nill then project_action = _ACTION end
-
+	
 	-- Where the project files (vs project, solution, etc) go
 	location( ROOT .. "_project/" .. project_action)
 	configurations { "Debug", "Production", "Release" }

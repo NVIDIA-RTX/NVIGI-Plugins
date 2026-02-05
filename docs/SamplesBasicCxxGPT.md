@@ -74,13 +74,13 @@ bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64
 To use a cloud provider (e.g., OpenAI):
 
 ```sh
-bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 --backend cloud --token YOUR_API_KEY --guid {E9102ACB-8CD8-4345-BCBF-CCF6DC758E58}
+bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 --backend cloud --token YOUR_API_KEY --guid "{E9102ACB-8CD8-4345-BCBF-CCF6DC758E58}"
 ```
 
 To use NVIDIA NIM:
 
 ```sh
-bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 --backend cloud --token YOUR_NVIDIA_API_KEY --guid {01F43B70-CE23-42CA-9606-74E80C5ED0B6}
+bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 --backend cloud --token YOUR_NVIDIA_API_KEY --guid "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}"
 ```
 
 ## Command Line Options
@@ -93,7 +93,7 @@ Usage: nvigi.basic.gpt.cxx [options]
   -m, --models           model repo location (REQUIRED)
   -t, --threads          number of threads (default: 1)
   --backend              backend to use - d3d12, cuda, vulkan, cloud (default: d3d12)
-  --guid                 gpt model guid in registry format (default: {8E31808B-C182-4016-9ED8-64804FF5B40D})
+  --guid                 gpt model guid in registry format, in quotes (default: "{8E31808B-C182-4016-9ED8-64804FF5B40D}")
   --url                  URL to use, if none provided default is taken from model JSON
   --json                 custom JSON body for cloud request (path to JSON file)
   --token                authorization token for the cloud provider
@@ -108,7 +108,7 @@ Usage: nvigi.basic.gpt.cxx [options]
 ### Use a different local model:
 
 ```sh
-bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 --guid {01F43B70-CE23-42CA-9606-74E80C5ED0B6}
+bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 --guid "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}"
 ```
 
 ### Use Vulkan backend with 4-bit cache quantization:
@@ -199,7 +199,7 @@ bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 --cache
 bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 ^
     --backend cloud ^
     --token sk-... ^
-    --guid {E9102ACB-8CD8-4345-BCBF-CCF6DC758E58}
+    --guid "{E9102ACB-8CD8-4345-BCBF-CCF6DC758E58}"
 ```
 
 ### NVIDIA NIM
@@ -208,7 +208,7 @@ bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 ^
 bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 ^
     --backend cloud ^
     --token nvapi-... ^
-    --guid {01F43B70-CE23-42CA-9606-74E80C5ED0B6}
+    --guid "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}"
 ```
 
 ### Custom OpenAI-Compatible API
@@ -218,7 +218,7 @@ bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 ^
     --backend cloud ^
     --url https://your-api.com/v1/chat/completions ^
     --token your-token ^
-    --guid {YOUR-MODEL-GUID}
+    --guid "{YOUR-MODEL-GUID}"
 ```
 
 ## Troubleshooting

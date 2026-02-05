@@ -22,7 +22,7 @@
 		<package name="libcurl" version="8.1.2-3-linux-x86_64-static-release" platforms="linux-x86_64"/>
 	</dependency>
 	<dependency name="llamacpp" linkPath="external/llama.cpp">
-		<package name="llamacpp" version="69cd536_x64-windows" platforms="windows-x86_64"/>
+		<package name="llamacpp" version="40c45b4_x64-windows" platforms="windows-x86_64"/>
 		<package name="llamacpp" version="e6b2933_x64-linux" platforms="linux-x86_64"/>
 	</dependency>
 	<dependency name="Microsoft.AI.DirectML.1.15.4" linkPath="external/Microsoft.AI.DirectML.1.15.4">
@@ -47,7 +47,7 @@
 		<package name="vulkansdk" version="1.4.321.1-linux_x86_64" platforms="linux-x86_64"/>
 	</dependency>
 	<dependency name="whispercpp" linkPath="external/whisper.cpp">
-		<package name="whispercpp" version="3b678fc_x64-windows" platforms="windows-x86_64"/>
+		<package name="whispercpp" version="a329b6a_x64-windows" platforms="windows-x86_64"/>
 		<package name="whispercpp" version="4600650_x64-linux" platforms="linux-x86_64"/>
 	</dependency>
 	<dependency name="zlib" linkPath="external/zlib">
