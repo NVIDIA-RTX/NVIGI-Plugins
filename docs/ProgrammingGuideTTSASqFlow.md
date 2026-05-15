@@ -6,6 +6,8 @@ The focus of this guide is on using AI Inference Manager to integrate a TTS mode
 
 > **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the SDK's Basic command line sample. For modern C++ examples, see [basic_tts.cpp](../source/samples/nvigi.basic.cxx/tts/basic_tts.cpp) which demonstrates both the low-level C API and the modern C++ wrapper with RAII, `std::expected`, and builder patterns. The wrapper code is located in [tts.hpp](../source/samples/shared/cxx_wrappers/tts/tts.hpp).
 
+> **NOTE**: It is best to use one GPU inference API (CUDA, Vulkan or D3D12) per application run/process and not switch between them at runtime for optimal performance and stability.
+
 > **RECOMMENDED**: For new projects, consider using the **Modern C++ Wrapper** (sections 1.2.1, 2.1, 3.1, 4.3, 6.1, and 7.1) which provides a cleaner API with automatic resource management, error handling via `std::expected`, and game-loop friendly async operations.
 
 > **IMPORTANT NOTE: The CUDA backend (nvigi.plugin.tts.asqflow-ggml.cuda.dll) strongly recommends an NVIDIA R580 driver or newer in order to avoid a potential memory leak if CiG (CUDA in Graphics) is used and the application deletes D3D12 command queues mid-application.**
@@ -123,7 +125,6 @@ std::cout << "Detected " << sysInfo.getNumAdapters() << " adapters\n";
 
 Next, we need to retrieve TTS's API interface based on ASqFlow. ASqFlow supports multiple backends:
 
-- **TRT Backend**: Optimized TensorRT implementation
 - **GGML CUDA Backend**: Experimental GGML-based implementation with additional runtime configuration options and **language selection support**. The GGML backend provides two model variants:
   - **FP16 Model**: `{16EEB8EA-55A8-4F40-BECE-CE995AF44101}` - Higher precision, better quality
   - **Q4 Model**: `{3D52FDC0-5B6D-48E1-B108-84D308818602}` - Quantized model, smaller memory footprint
@@ -131,12 +132,6 @@ Next, we need to retrieve TTS's API interface based on ASqFlow. ASqFlow supports
 ```cpp
 
 nvigi::ITTS ittsLocal{};
-// Here we are requesting interface for the TRT implementation
-if(NVIGI_FAILED(res, nvigiGetInterface(nvigi::plugin::tts::asqflow::trt::kId, ittsLocal))
-{
-    LOG("NVIGI call failed, code %d", res);
-}
-
 // Alternative: GGML CUDA backend
 if(NVIGI_FAILED(res, nvigiGetInterface(nvigi::plugin::tts::asqflow::ggml::cuda::kId, ittsLocal))
 {
@@ -192,7 +187,7 @@ nvigi::TTSASqFlowRuntimeParameters runtime{};
 runtime.language = "es";  // Generate Spanish speech
 ```
 
-> **NOTE**: Language selection is only available with the GGML backend. The TRT backend does not currently support language selection and will use the default English model.
+> **NOTE**: Language selection is only available with the GGML backend.
 
 ## 3.0 CREATE TTS INSTANCE(S)
 
@@ -222,9 +217,6 @@ nvigi::InferenceInstance* ttsInstanceLocal;
     common.vramBudgetMB = myVRAMBudget;  // How much VRAM is instance allowed to occupy
     common.utf8PathToModels = myPathToNVIGIModelRepository; // Path to provided NVIGI model repository (using UTF-8 encoding)
     // Model GUID for ASqFlow model - choose based on your requirements:
-    // For TRT backend:
-    common.modelGUID = "{81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F}"; // TRT model
-    
     // For GGML backend - two options available:
     // common.modelGUID = "{16EEB8EA-55A8-4F40-BECE-CE995AF44101}"; // GGML FP16 model (higher quality)
     // common.modelGUID = "{3D52FDC0-5B6D-48E1-B108-84D308818602}"; // GGML Q4 model (smaller memory footprint)

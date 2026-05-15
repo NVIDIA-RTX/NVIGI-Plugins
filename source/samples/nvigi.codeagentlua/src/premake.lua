@@ -2,11 +2,16 @@ group "samples/codeagentlua"
 
 -- Build Lua as a static library to be used by nvigi.codeagentlua
 project "liblua"
-    kind "StaticLib"
+	if premakeX64Targets() then
+		filter { "platforms:x64" }
+			kind "StaticLib"
+		filter {}
+	end
+
     language "C"
     targetname "lua" -- produces lua.lib
-    targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
-    objdir    (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
+    targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.platform}/%{cfg.buildcfg}")
+    objdir    (ROOT .. "_artifacts/%{prj.name}/%{cfg.platform}/%{cfg.buildcfg}")
 
     characterset "MBCS"
 
@@ -49,17 +54,17 @@ project "liblua"
         "../external/lua/src/linit.c"
     }
 
-    filter "system:not windows"
-        links { "m" }
-    filter {}
-
-
 if os.istarget("windows") then
 
 project "nvigi.codeagentlua"
-    kind "ConsoleApp"
-    targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
-    objdir    (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
+	if premakeX64Targets() then
+		filter { "platforms:x64" }
+			kind "ConsoleApp"
+		filter {}
+	end
+
+    targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.platform}/%{cfg.buildcfg}")
+    objdir    (ROOT .. "_artifacts/%{prj.name}/%{cfg.platform}/%{cfg.buildcfg}")
     dependson { "gitVersion", "liblua" }
 
     files {
@@ -86,9 +91,6 @@ project "nvigi.codeagentlua"
         links {
             "liblua",
         }
-
-    filter { "system:linux" }
-        -- linux-specific flags if ever needed
 
     filter {}
 

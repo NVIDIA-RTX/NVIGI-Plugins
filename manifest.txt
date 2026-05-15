@@ -174,7 +174,6 @@
 	nvigi-sdk-source\source\plugins\nvigi.embed\ggml\__pycache__/package.cpython-38.pyc
 	nvigi-sdk-source\source\plugins\nvigi.gpt/nvigi_gpt.h
 	nvigi-sdk-source\source\plugins\nvigi.gpt\ggml/gpt.cpp
-	nvigi-sdk-source\source\plugins\nvigi.gpt\ggml/gpt.h
 	nvigi-sdk-source\source\plugins\nvigi.gpt\ggml/nvcf.h
 	nvigi-sdk-source\source\plugins\nvigi.gpt\ggml/package.py
 	nvigi-sdk-source\source\plugins\nvigi.gpt\ggml/plugin.rc
@@ -199,22 +198,6 @@
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\ggml/tts.h
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\ggml/versions.h
 	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\ggml\__pycache__/package.cpython-38.pyc
-	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/asqflow.cpp
-	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/asqflow.h
-	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/asqflow_inference.cpp
-	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/asqflow_inference.h
-	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/language_normalizer.cpp
-	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/language_normalizer.h
-	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/package.py
-	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/plugin.rc
-	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/premake.lua
-	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/resource.h
-	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/symbols.h
-	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt/versions.h
-	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt\__pycache__/package.cpython-38.pyc
-	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt\external_trt/README.md
-	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt\external_trt/TRTModel.h
-	nvigi-sdk-source\source\plugins\nvigi.tts\asqflow\trt\external_trt/TRTTensor.h
 	nvigi-sdk-source\source\samples\nvigi.3d/.gitattributes
 	nvigi-sdk-source\source\samples\nvigi.3d/.gitignore
 	nvigi-sdk-source\source\samples\nvigi.3d/package.py

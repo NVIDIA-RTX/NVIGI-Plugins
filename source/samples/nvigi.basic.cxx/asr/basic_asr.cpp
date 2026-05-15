@@ -40,7 +40,8 @@ int main(int argc, char** argv) {
         auto parser = clparser::create_parser();
         parser.add_command("", "sdk", " sdk location, if none provided assuming exe location", "", true)
             .add_command("", "plugin", " plugin location, if none provided assuming sdk location", "")
-            .add_command("m", "models", " model repo location", "", true)
+            .add_command("m", "models", " model repo location", "")
+            .add_command("", "model-card", " path to model card JSON file (replaces --models + --guid)", "")
             .add_command("t", "threads", " number of threads", "8")
             .add_command("fa", "flash-attention", " use flash attention")
             .add_command("", "backend", " backend to use - d3d12, cuda, vulkan", "d3d12")
@@ -105,36 +106,123 @@ int main(int argc, char** argv) {
 
             bool use_streaming = parser.has("streaming");
 
-            // Optional: Configure custom IO callbacks for loading models from memory, network, database, etc.
-            // See io_helpers.hpp and io_callbacks_example.hpp for details
-            // 
-            auto io_config = nvigi::io::create_file_wrapper_io(
-                [](const char* path) {
-                    std::cout << "Opening: " << path << "\n";
-                    return true;  // Allow open
-                }
-            );
+            // ===================================================================
+            // Model Card JSON Support
+            // ===================================================================
+            // NVIGI supports two ways to specify which model to load:
+            //
+            // 1. Traditional approach (--models + --guid):
+            //    Provide a path to the model repository and a GUID that identifies
+            //    the specific model in the registry. The SDK locates and loads the
+            //    model using its built-in file system access.
+            //
+            // 2. Model card JSON approach (--model-card):
+            //    Provide a JSON file that contains all model metadata including
+            //    file paths, configuration, and capabilities. This approach gives
+            //    the host application full control over model discovery and loading.
+            //    When using this approach, --models and --guid are ignored because
+            //    the JSON already contains all the information the SDK needs.
+            //
+            // IMPORTANT constraint on FileIOCallbacks:
+            //    Custom IO callbacks (FileIOCallbacks) can ONLY be used together
+            //    with the model card JSON approach. When using the traditional
+            //    --models + --guid approach, FileIOCallbacks MUST be nullptr
+            //    because the SDK manages file I/O internally in that mode.
+            //    Passing FileIOCallbacks without a model card JSON is not supported.
+            // ===================================================================
 
-            // Create ASR instance
+            // Read the model card JSON file if the --model-card option was provided.
+            // parser.get_file() reads the file at the given path and caches its contents.
+            // The returned string_view remains valid for the lifetime of the parser.
+            std::string model_card_json_contents;
+            if (parser.is_set("model-card")) {
+                model_card_json_contents = std::string(parser.get_file("model-card"));
+                std::cout << "Model card JSON loaded from: " << parser.get("model-card") << "\n";
+                std::cout << "Model card size: " << model_card_json_contents.size() << " bytes\n";
+            } else if (!parser.is_set("models")) {
+                // Neither --model-card nor --models was provided — cannot proceed.
+                // One of these two approaches must be used to identify the model.
+                throw std::runtime_error(
+                    "Either --models (with --guid) or --model-card must be provided.\n"
+                    "  --models/-m <path>      Traditional: model repository path + GUID\n"
+                    "  --model-card <path>     Alternative: model card JSON file (replaces --models + --guid)"
+                );
+            }
+
+            // ===================================================================
+            // File IO Callbacks Configuration
+            // ===================================================================
+            // FileIOCallbacks allow the host to intercept all file operations
+            // (open, read, seek, close, etc.) that the SDK performs when loading
+            // model data. This enables custom loading strategies such as:
+            //   - Streaming from network/cloud storage
+            //   - Reading from encrypted or compressed archives
+            //   - Loading from memory buffers or databases
+            //   - Logging/auditing which files are accessed
+            //
+            // CRITICAL: FileIOCallbacks are ONLY valid when a model card JSON is
+            // provided. Without a model card, the SDK uses its own internal file
+            // system layer and does not call FileIOCallbacks. Passing non-null
+            // FileIOCallbacks without a model card JSON results in undefined behavior.
+            //
+            // When io_config has enable_custom_io = false (the default), the helper
+            // configure_io_callbacks() skips chaining FileIOCallbacks entirely,
+            // which is equivalent to passing nullptr to the SDK.
+            // ===================================================================
+            nvigi::io::IOConfig io_config{};  // Default: no custom IO → FileIOCallbacks = nullptr
+            if (!model_card_json_contents.empty()) {
+                // Model card JSON mode: provide FileIOCallbacks so the SDK can
+                // load model files through our file system wrapper.
+                // create_file_wrapper_io() wraps standard FILE* operations and
+                // accepts an optional open callback for logging/filtering.
+                io_config = nvigi::io::create_file_wrapper_io(
+                    [](const char* path) {
+                        std::cout << "  [IO] Opening: " << path << "\n";
+                        return true;  // Return false to reject/block a file open
+                    }
+                );
+            }
+            // When model_card_json_contents is empty (traditional mode), io_config
+            // stays default-initialized with enable_custom_io = false. This causes
+            // configure_io_callbacks() to return early without chaining any
+            // FileIOCallbacks, effectively passing nullptr to the SDK.
+
+            // Create ASR instance.
+            // ModelConfig supports two mutually exclusive model specification modes:
+            //   - Traditional (guid + model_path): SDK resolves the model internally
+            //   - Model card JSON (model_card_json): host provides full model metadata
+            // When model_card_json is non-empty, the wrapper automatically ignores
+            // guid and model_path (sets them to empty in CommonCreationParameters).
             std::unique_ptr<Instance> instance;
             instance = Instance::create(
                 ModelConfig{
                     .backend = parser.get("backend"),
+                    // guid and model_path are used in traditional mode. When model_card_json
+                    // is provided, these are overridden to empty by the wrapper internally.
                     .guid = parser.get("guid"),
                     .model_path = parser.get("models"),
+                    // model_card_json: when non-empty, this JSON string replaces the
+                    // traditional guid + model_path approach. The JSON contains all
+                    // model metadata (file paths, parameters, capabilities) that the
+                    // SDK needs. CommonCreationParameters.modelCardJSON is set to this
+                    // value, and modelGUID / utf8PathToModels are cleared.
+                    .model_card_json = model_card_json_contents,
                     .num_threads = parser.get_int("threads"),
                     .vram_budget_mb = parser.get_size_t("vram"),
                     .flash_attention = parser.has("flash-attention"),
                     .language = parser.get("language"),
                     .translate = parser.has("translate"),
                     .detect_language = parser.has("detect-lang"),
-                    .lengthMs = parser.get_int("length"), // length of audio segments in milliseconds
-                    .keepMs = parser.get_int("keep"), // amount of previous audio to keep as context for streaming mode, in milliseconds
-                    .stepMs = parser.get_int("step"), // step size for streaming mode, in milliseconds
+                    .lengthMs = parser.get_int("length"),
+                    .keepMs = parser.get_int("keep"),
+                    .stepMs = parser.get_int("step"),
                 },
                 d3d12_config,
                 vk_config,
-                io_config, // use {} for default file system loading, or pass custom IOConfig
+                // io_config: contains active FileIOCallbacks ONLY when model card JSON
+                // is set. In traditional mode (guid + model_path), this is a default
+                // IOConfig with enable_custom_io=false → no FileIOCallbacks (nullptr).
+                io_config,
                 core.loadInterface(),
                 core.unloadInterface(),
                 parser.get("plugin")

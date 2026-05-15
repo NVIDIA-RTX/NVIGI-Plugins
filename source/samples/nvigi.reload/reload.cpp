@@ -4,8 +4,6 @@
 
 #ifdef NVIGI_WINDOWS
 #include <conio.h>
-#else
-#include <linux/limits.h>
 #endif
 
 #include <cassert>
@@ -47,26 +45,6 @@ namespace fs = std::filesystem;
 #include <nvigi_d3d12.h>
 #include "nvigi_gpt.h"
 #include <nvigi_stl_helpers.h>
-
-#if NVIGI_LINUX
-#include <unistd.h>
-#include <dlfcn.h>
-using HMODULE = void*;
-#define GetProcAddress dlsym
-#define FreeLibrary dlclose
-#define LoadLibraryA(lib) dlopen(lib, RTLD_LAZY)
-#define LoadLibraryW(lib) dlopen(nvigi::extra::toStr(lib).c_str(), RTLD_LAZY)
-
-#define sscanf_s sscanf
-#define strcpy_s(a,b,c) strcpy(a,c)
-#define strcat_s(a,b,c) strcat(a,c)
-#define memcpy_s(a,b,c,d) memcpy(a,c,d)
-typedef struct __LUID
-{
-    unsigned long LowPart;
-    long HighPart;
-} 	LUID;
-#endif
 
 #define DECLARE_NVIGI_CORE_FUN(F) PFun_##F* ptr_##F
 #define GET_NVIGI_CORE_FUN(lib, F) ptr_##F = (PFun_##F*)GetProcAddress(lib, #F)
@@ -199,13 +177,7 @@ private:
 
 inline std::string getExecutablePath()
 {
-#ifdef NVIGI_LINUX
-    char exePath[PATH_MAX] = {};
-    readlink("/proc/self/exe", exePath, sizeof(exePath));
-    std::string searchPathW = exePath;
-    searchPathW.erase(searchPathW.rfind('/'));
-    return searchPathW + "/";
-#else
+#ifdef NVIGI_WINDOWS
     CHAR pathAbsW[MAX_PATH] = {};
     GetModuleFileNameA(GetModuleHandleA(NULL), pathAbsW, ARRAYSIZE(pathAbsW));
     std::string searchPathW = pathAbsW;
@@ -626,8 +598,15 @@ int GPTInference(const std::string& modelName, std::string& gptInputText, bool c
     gptExecCtx.runtimeParameters = runtime;
 
     nvigi::InferenceDataTextSTLHelper text(gptInputText);
-    std::vector<nvigi::InferenceDataSlot> slots = {
-        {cbkCtx.conversationInitialized ? nvigi::kGPTDataSlotUser : nvigi::kGPTDataSlotSystem, text} };
+    std::string gptSystemText = "This is a transcript of a dialog between a user and a helpful AI assistant.\
+        Generate only medium size answers and avoid describing what you are doing physically.\
+        Avoid using specific words that are not part of the dictionary.\n";
+    nvigi::InferenceDataTextSTLHelper systemText(gptSystemText);
+    std::vector<nvigi::InferenceDataSlot> slots;
+    if (!cbkCtx.conversationInitialized) {
+        slots.push_back({ nvigi::kGPTDataSlotSystem, systemText });
+    }
+    slots.push_back({ nvigi::kGPTDataSlotUser, text });
     nvigi::InferenceDataSlotArray inputs = { slots.size(), slots.data() };
     gptExecCtx.inputs = &inputs;
 
@@ -731,9 +710,7 @@ int main(int argc, char** argv)
         bool conversationInitialized = false;
 		bool runInference = true;
 		std::string gptModelName = "llama3";
-        std::string gptInputText = "This is a transcript of a dialog between a user and a helpful AI assistant.\
- Generate only medium size answers and avoid describing what you are doing physically.\
- Avoid using specific words that are not part of the dictionary.\n";
+        std::string gptInputText = "Hi - who are you?\n";
 
         do
         {

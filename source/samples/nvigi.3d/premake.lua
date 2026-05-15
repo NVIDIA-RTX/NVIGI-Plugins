@@ -7,9 +7,14 @@ donut_dir = externaldir.."donut"
 local corePath = _SCRIPT_DIR
 
 project "nvigi.3d"
-	kind "WindowedApp"
-	targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
-	objdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
+	if premakeX64Targets() then
+		filter { "platforms:x64" }
+			kind "WindowedApp"
+		filter {}
+	end
+
+	targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.platform}/%{cfg.buildcfg}")
+	objdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.platform}/%{cfg.buildcfg}")
 	
 	dependson {"gitVersion"}
 
@@ -72,15 +77,18 @@ project "nvigi.3d"
 		donut_dir.."/nvrhi/thirdparty/Vulkan-Headers/include"
 	}
 
-	libdirs {
-		donut_dir.."/%{cfg.buildcfg}",
-		donut_dir.."/nvrhi/%{cfg.buildcfg}",
-		donut_dir.."/thirdparty/%{cfg.buildcfg}",
-		donut_dir.."/thirdparty/glfw/src/%{cfg.buildcfg}",
-		donut_dir.."/thirdparty/miniz/%{cfg.buildcfg}",
-		donut_dir.."/thirdparty/jsoncpp/src/lib_json/%{cfg.buildcfg}",
-		donut_dir.."/ShaderMake/%{cfg.buildcfg}",
-	}
+	filter { "platforms:x64" }
+		libdirs {
+			donut_dir.."/%{cfg.buildcfg}",
+			donut_dir.."/nvrhi/%{cfg.buildcfg}",
+			donut_dir.."/thirdparty/%{cfg.buildcfg}",
+			donut_dir.."/thirdparty/glfw/src/%{cfg.buildcfg}",
+			donut_dir.."/thirdparty/miniz/%{cfg.buildcfg}",
+			donut_dir.."/thirdparty/jsoncpp/src/lib_json/%{cfg.buildcfg}",
+			donut_dir.."/ShaderMake/%{cfg.buildcfg}",
+		}
+	filter {}
+
 
 	links { 
 		"donut_core.lib",
@@ -107,7 +115,6 @@ project "nvigi.3d"
 		vpaths { ["utils"] = {ROOT .. "source/utils/**.h",ROOT .. "source/utils/**.cpp", }}
 		vpaths { ["shared"] = {ROOT .. "source/samples/shared/cxx_wrappers/**.hpp"}}
 		links { "dsound.lib", "winmm.lib" }
-	filter {"system:linux"}
 	filter {}
 
 	postbuildcommands {

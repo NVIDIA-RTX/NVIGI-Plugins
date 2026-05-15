@@ -4,25 +4,25 @@
 
 # Component packaging configuration for nvigi.fcall sample
 # This file is imported by tools/packaging/package.py
+# Component platforms default to win-x64; extend when adding targets (see ALL_PLATFORMS).
 
 def get_components(externals):
     """
     Returns component definitions for this sample.
     Args:
-        externals: dict of external package definitions from main package.py
+        externals: dict of external package definitions from main package.py (includes DEFAULT_COMPONENT_PLATFORMS, ALL_PLATFORMS).
     """
-    win_plat = ['win-x64']
-    
+    supported_platforms = externals['DEFAULT_COMPONENT_PLATFORMS']
+
     # Define externals specific to this component
-    curl_ext = {"dep":"libcurl", "path":"external/libcurl",
-                "items":[{"name":"libcurl", "version":"7.80.0+nv1-windows-x86_64","platforms":"windows-x86_64"},
-                         {"name":"libcurl", "version":"8.1.2-3-linux-x86_64-static-release","platforms":"linux-x86_64"}
-                        ]
-               }
+    curl_ext = [
+        {"dep":"libcurl", "target":"win-x64", "path":"external/libcurl",
+        "name":"libcurl", "version":"7.80.0+nv1-windows-x86_64","host_platform":"windows-x86_64"},
+    ]
     
     components = {
         'fcall': {
-            'platforms': win_plat,
+            'platforms': supported_platforms,
             'exes': ['nvigi.fcall'],
             'sources': ['samples/nvigi.fcall'],
             'externals': [externals['nlohmann_json_ext'], curl_ext, externals['zlib_ext']],

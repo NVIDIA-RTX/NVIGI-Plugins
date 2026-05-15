@@ -2,6 +2,7 @@
 setlocal enabledelayedexpansion
 set cfg=vs2022
 set comps=""
+set platforms=--x64
 set premake=Yes
 :loop
 IF NOT "%1"=="" (
@@ -17,6 +18,8 @@ IF NOT "%1"=="" (
         SHIFT
     ) ELSE IF "%1"=="-nopremake" (
         SET premake=No
+    ) ELSE IF "%1"=="-x64" (
+        SET platforms=--x64
     ) ELSE (
         REM Unrecognized switch, print error message and exit
         echo Error: Unrecognized switch: %1
@@ -37,9 +40,9 @@ IF "%cfg%"=="" (
 REM Pull the basic tools we need for the next steps
 call .\tools\packman\packman.cmd pull -p windows-x86_64 .\tools\project.tools.xml
 
-if exist .\scripts\setup_extra.bat call .\scripts\setup_extra.bat %comps:"=%
+if exist .\scripts\setup_extra.bat call .\scripts\setup_extra.bat %platforms% %comps:"=%
 if exist project.xml call .\tools\packman\packman.cmd pull -p windows-x86_64 project.xml
 IF "%premake%"=="Yes" (
     echo Creating project files for %cfg%
-    call .\tools\premake5\premake5.exe %cfg% --file=.\premake.lua
+    call .\tools\premake5\premake5.exe %cfg% %platforms% --file=.\premake.lua
 )

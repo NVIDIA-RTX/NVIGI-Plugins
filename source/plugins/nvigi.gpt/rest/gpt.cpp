@@ -36,6 +36,8 @@ struct InferenceContext
     std::string url{};
     bool verboseMode{};
     bool stream{};
+    //! Copied from RESTParameters (v3+); drives net::Parameters.allowHTTP for http:// vs https://.
+    bool allowHTTP = false;
     json modelInfo;
     std::future<nvigi::Result> asyncJob;
 };
@@ -139,14 +141,18 @@ nvigi::Result restCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
         return kResultInvalidState;
     }
 
-    std::string model = modelInfo[common->modelGUID]["request_body"]["model"];
-    NVIGI_LOG_INFO("Created instance for the remote model '%s', stream %s, verbose %s", model.c_str(), restParams->useStreaming ? "yes" : "no", restParams->verboseMode ? "yes" : "no");
+    if (modelInfo[common->modelGUID]["request_body"].contains("model"))
+    {
+        std::string model = modelInfo[common->modelGUID]["request_body"]["model"];
+        NVIGI_LOG_INFO("Created instance for the remote model '%s', stream %s, verbose %s", model.c_str(), restParams->useStreaming ? "yes" : "no", restParams->verboseMode ? "yes" : "no");
+    }
 
     auto instanceData = new nvigi::gpt::InferenceContext();
     instanceData->token = restParams->authenticationToken;
     instanceData->url = restParams->url;
     instanceData->verboseMode = restParams->verboseMode;
     instanceData->stream = restParams->getVersion() >= 2 ? restParams->useStreaming : false;
+    instanceData->allowHTTP = restParams->getVersion() >= 3 && restParams->allowHTTP;
 
     // Explicitly declaring that we are implementing v1
     auto instance = new InferenceInstance(kStructVersion1);
@@ -327,16 +333,64 @@ nvigi::Result restEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
         {
             json responseJSON = json::parse(response);
             responseJSONStr = responseJSON.dump(2, ' ', false, json::error_handler_t::replace);
-            auto& firstChoice = responseJSON["choices"][0];
-            if (firstChoice.contains("delta"))
+            if (responseJSON.contains("choices") && responseJSON["choices"].is_array() && !responseJSON["choices"].empty())
             {
-                // streaming
-                content = firstChoice["delta"]["content"];
+                auto& firstChoice = responseJSON["choices"][0];
+                if (firstChoice.contains("delta"))
+                {
+                    // OpenAI-style streaming chunk (aggregated or single)
+                    if (firstChoice["delta"]["content"].is_string())
+                    {
+                        std::string delta_content = firstChoice["delta"]["content"].get<std::string>();
+                        // only fill in content if it has something, otherwise, it's better to send back the unfiltered json response so that the end user might be able
+                        // to figure out what's going on.
+                        if (!delta_content.empty())
+                        {
+                            content = delta_content;
+                        }
+                    }
+                }
+                else if (firstChoice.contains("message") && firstChoice["message"].contains("content"))
+                {
+                    if (firstChoice["message"]["content"].is_string())
+                    {
+                        std::string message_content = firstChoice["message"]["content"].get<std::string>();
+                        if (!message_content.empty())
+                        {
+                            content = message_content;
+                        }
+                        else
+                        {
+                            if (firstChoice.contains("message") && firstChoice["message"].contains("reasoning_content"))
+                            {
+                                // in this case, the message has an empty content but might have reasoning_content that simply ran out of length. 
+                                if (firstChoice["message"]["reasoning_content"].is_string())
+                                {
+                                    std::string reasoning_content = firstChoice["message"]["reasoning_content"].get<std::string>();
+                                    if (!reasoning_content.empty())
+                                    {
+                                        content = reasoning_content;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                else 
+                {
+                    // typical cases are not in the json for some reason, so this is a hail mary
+                    content = responseJSONStr;
+                }
             }
-            else
+            else if (responseJSON.contains("content") && responseJSON["content"].is_string())
             {
-                // full message
-                content = firstChoice["message"]["content"];
+                // llama.cpp server POST /completion (non-streaming)
+                content = responseJSON["content"].get<std::string>();
+            }
+            else 
+            {
+                // typical cases are not in the json for some reason, so this is a hail mary
+                content = responseJSONStr;
             }
             if (runtime && runtime->interactive)
             {
@@ -494,6 +548,7 @@ nvigi::Result restEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
 
     net::Parameters hparams;
     hparams.url = instance->url.c_str();
+    hparams.allowHTTP = instance->allowHTTP;
     hparams.headers = { "accept: application/json", "Content-Type: application/json" };
 
     std::string jsonObj = jsonData.dump(2, ' ', false, json::error_handler_t::replace);
@@ -565,7 +620,14 @@ nvigi::Result restEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async
                             {
                                 if (choice["delta"]["content"].is_string()) {
                                     std::string content = choice["delta"]["content"];
-                                    (*ctx->originalCallback)(ctx->instance, chunkJson.dump().c_str(), nvigi::kInferenceExecutionStateDataPending);
+                                    (*ctx->originalCallback)(ctx->instance, content.c_str(), nvigi::kInferenceExecutionStateDataPending);
+                                }
+                            }
+                            else if (choice.contains("delta") && choice["delta"].contains("reasoning_content"))
+                            {
+                                if (choice["delta"]["reasoning_content"].is_string()) {
+                                    std::string content = choice["delta"]["reasoning_content"];
+                                    (*ctx->originalCallback)(ctx->instance, content.c_str(), nvigi::kInferenceExecutionStateDataPending);
                                 }
                             }
                         }

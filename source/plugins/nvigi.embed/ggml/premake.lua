@@ -1,9 +1,15 @@
 group "plugins/embed"
 
 local external_dir_llamacpp = externaldir .. "llama.cpp"
+
 project "nvigi.plugin.embed.ggml.cuda"
+	if premakeX64Targets() then
+		filter { "platforms:x64" }
+			kind "SharedLib"
+		filter {}
+	end
 	pluginBasicSetup("embed/ggml")
-	
+
 	defines {
 		"GGML_USE_CUBLAS=1",
 		"GGML_USE_CUDA=1",
@@ -17,110 +23,101 @@ project "nvigi.plugin.embed.ggml.cuda"
 		"GGML_CUDA_NO_VMM"
     }
 
-	vectorextensions "AVX2"
-	
 	files {
 		"../*.h",
 		"*.h",
-		"*.cpp"	
+		"*.cpp"
 	}
-	
-	includedirs {
-				externaldir .."cuda/include",
-				coresdkdir .. "source/utils/nvigi.ai", ROOT .. "source/plugins/nvigi.embed/ggml/",
-				external_dir_llamacpp .. "/common", 
-				external_dir_llamacpp .. "/ggml/include", 
-				external_dir_llamacpp .. "/include",
-			}
-	
-	vpaths { ["impl"] = {"../*.h", "./*.h", "./*.cpp" }}
 
-	-- some 3rd party libs (ggml) do not compile without it in production mode when security flags are set
-	filter {"system:windows","configurations:Production"}
-			defines {"_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS"} 
-	filter{}
-
-	filter {"system:windows"}
+	filter {"system:windows", "platforms:x64"}
+		vectorextensions "AVX2"
+		includedirs {
+			externaldir .."cuda/include",
+			coresdkdir .. "source/utils/nvigi.ai",
+			ROOT .. "source/plugins/nvigi.embed/ggml/",
+			external_dir_llamacpp .. "/common",
+			external_dir_llamacpp .. "/ggml/include",
+			external_dir_llamacpp .. "/include",
+		}
 
 		libdirs {
 			externaldir .."cuda//lib/x64",
 			external_dir_llamacpp .. "/cuda/lib/".."%{iif(cfg.buildcfg:startswith(\"Debug\"), \"Debug\", \"NotDebug\")}",
 		}
-
-		links {"cuda.lib", "cublas.lib"}
-
-		links {
-			"common.lib",
-			"ggml.lib", 
-			"llama.lib",
-			"ggml-cpu.lib",
-			"ggml-cuda.lib",
-			"ggml-base.lib"
-		}
-
-
-	filter {"system:linux"}
-		libdirs {
-			externaldir .."cuda/lib64",
-			externaldir .."cuda/lib64/stubs",
-			external_dir_llamacpp .. "/cuda/lib64/",
-		}
-		linkoptions {"-fopenmp", "-lcublas"}
-		links {"common", "llama", "ggml", "ggml-base","ggml-cpu","ggml-cuda","cuda", "cublas", "dl", "pthread", "rt"}
-
 	filter {}
+
+
+	filter {"system:windows","configurations:Production"}
+			defines {"_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS"} 
+	filter{}
+
+	vpaths { ["impl"] = {"../*.h", "./*.h", "./*.cpp" }}
+
+	links {"cuda.lib", "cublas.lib"}
+
+	links {
+		"common.lib",
+		"cpp-httplib.lib",
+		"ggml.lib",
+		"llama.lib",
+		"ggml-cpu.lib",
+		"ggml-cuda.lib",
+		"ggml-base.lib"
+	}
 
 	add_cuda_dependencies()
 
 project "nvigi.plugin.embed.ggml.cpu"
+	if premakeX64Targets() then
+		filter { "platforms:x64" }
+			kind "SharedLib"
+		filter {}
+	end
+
 	pluginBasicSetup("embed/ggml")
-	
+
 	defines {
 		"K_QUANTS_PER_ITERATION=2",
 		"GGML_USE_K_QUANTS"
     }
 
-	vectorextensions "AVX2"
-	
-	-- some 3rd party libs (ggml) do not compile without it in production mode when security flags are set
-	filter {"system:windows","configurations:Production"}
-			defines {"_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS"} 
-	filter{}
-	
 	files {
 		"../*.h",
 		"./*.h",
 		"./*.cpp",
-		
-	}
-	includedirs {
-		coresdkdir .. "source/utils/nvigi.ai", 
-		ROOT .. "source/plugins/nvigi.embed/ggml/",
-		external_dir_llamacpp .. "/common", 
-		external_dir_llamacpp .. "/ggml/include", 
-		external_dir_llamacpp .. "/include"
 	}
 
-	vpaths { ["impl"] = {"../*.h", "./*.h", "./*.cpp" }}
+	filter {"system:windows", "platforms:x64"}
+		vectorextensions "AVX2"
+		includedirs {
+			coresdkdir .. "source/utils/nvigi.ai",
+			ROOT .. "source/plugins/nvigi.embed/ggml/",
+			external_dir_llamacpp .. "/common",
+			external_dir_llamacpp .. "/ggml/include",
+			external_dir_llamacpp .. "/include"
+		}
 
-	filter {"system:windows"}
+		vpaths { ["impl"] = {"../*.h", "./*.h", "./*.cpp" }}
+
 		libdirs {
 			external_dir_llamacpp .. "/cpu/lib/".."%{iif(cfg.buildcfg:startswith(\"Debug\"), \"Debug\", \"NotDebug\")}",
 		}
+	filter {}
 
-		links {
-			"common.lib",
-			"ggml.lib", 
-			"llama.lib",
-			"ggml-cpu.lib",
-			"ggml-base.lib"
-		}
-	
-	filter {"system:linux"}
-		libdirs {
-			external_dir_llamacpp .. "/cpu/lib64/",
-		}
-		linkoptions {"-fopenmp"}
-		links {"common", "llama", "ggml", "ggml-base","ggml-cpu","dl", "pthread", "rt"}
+
+	filter {"system:windows","configurations:Production"}
+			defines {"_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS"}
+	filter{}
+
+	links {
+		"common.lib",
+		"cpp-httplib.lib",
+		"ggml.lib",
+		"llama.lib",
+		"ggml-cpu.lib",
+		"ggml-base.lib"
+	}
+
+	vpaths { ["impl"] = {"../*.h", "./*.h", "./*.cpp" }}
 
 group ""

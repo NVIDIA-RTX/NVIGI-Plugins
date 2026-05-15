@@ -105,7 +105,7 @@ bool ProcessCommandLine(int argc, const char* const* argv, Parameters& params)
         }
         else if (!strcmp(argv[i], "-fullscreen"))
         {
-            params.deviceParams.startFullscreen = false;
+            params.deviceParams.startFullscreen = true;
         }
     }
 

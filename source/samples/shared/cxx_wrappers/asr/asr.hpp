@@ -157,8 +157,15 @@ struct RuntimeConfig {
 
 struct ModelConfig {
     std::string_view backend;
+    
+    // Traditional approach: guid + model_path
     std::string_view guid;
     std::string_view model_path;
+    
+    // Alternative approach: embedded JSON (use one or the other, not both)
+    // When model_card_json is set, guid and model_path should be empty
+    std::string_view model_card_json;
+    
     int32_t num_threads{1};
     size_t vram_budget_mb{0};
     bool flash_attention{true};
@@ -203,6 +210,10 @@ struct ModelConfig {
     }
     ModelConfig& set_step_ms(int32_t step) {
         stepMs = step;
+        return *this;
+    }
+    ModelConfig& set_model_card_json(std::string_view json) {
+        model_card_json = json;
         return *this;
     }
 };
@@ -316,22 +327,32 @@ public:
             InterfaceManager::reference_count++;
         }
 
-        // Chain parameters
+        // All parameters we might need
         CommonCreationParameters common{};
         ASRWhisperCreationParameters params{};
         D3D12Parameters d3d12params{};
         VulkanParameters vkparams{};
         
         // Chain parameters (unused are simply ignored)
-        d3d12params.chain(common);        
-        common.chain(params);
-        params.chain(vkparams);
+        d3d12params.chain(vkparams);
+        vkparams.chain(params);
+        params.chain(common);
 
         // Set base parameters
-        common.utf8PathToModels = config.model_path.data();
+        // Use either traditional approach (guid + path) OR embedded JSON (not both)
+        if (!config.model_card_json.empty()) {
+            // Embedded JSON approach - guid and path should be empty
+            common.utf8PathToModels = "";
+            common.modelGUID = "";
+            common.modelCardJSON = config.model_card_json.data();
+        } else {
+            // Traditional approach - use guid and path
+            common.utf8PathToModels = config.model_path.data();
+            common.modelGUID = config.guid.data();
+            common.modelCardJSON = nullptr;
+        }
         common.numThreads = config.num_threads;
         common.vramBudgetMB = config.vram_budget_mb;
-        common.modelGUID = config.guid.data();
 
         params.language = config.language.data();
         params.flashAtt = config.flash_attention;
@@ -365,7 +386,7 @@ public:
         nvigi::io::configure_io_callbacks(common, io_config);
 
         auto creation_result = InterfaceManager::iasr->createInstance(
-            d3d12params,
+            d3d12params, // root of our chained params
             &instance->impl_->instance
         );
         

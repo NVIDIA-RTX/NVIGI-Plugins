@@ -24,22 +24,22 @@ See the top-level documentation that shipped with your development pack for info
 
 ### How to Run
 
-Because of the SDK layout, once the components are built they will be under the `_artifacts` tree; in order for the SDK to run an app like the sample, all of these DLLs and the executable must be in the same directory. We do this by copying the DLLs and EXE into the `bin\x64` directory, and running the app from within that directory, so all plugins are available.
+Because of the SDK layout, once the components are built they will be under the `_artifacts` tree; in order for the SDK to run an app like the sample, all of these DLLs and the executable must be in the same directory. We do this by copying the DLLs and EXE into the `bin\x64\Release` directory, and running the app from within that directory, so all plugins are available.
 
 **From Command Line:**
 
 1. Open a command prompt in `<SDK_ROOT>`
 2. Run:
 ```sh
-bin\x64\nvigi.codeagentlua.exe data/nvigi.models data/nvigi.test/nvigi.codeagentlua/codeagent_prompt_lua.txt
+bin\x64\Release\nvigi.codeagentlua.exe data/nvigi.models data/nvigi.test/nvigi.codeagentlua/codeagent_prompt_lua.txt
 ```
 
 **In Debugger:**
 
 1. Edit project settings for `nvigi/samples/nvigi.codeagentlua`
-2. Set "Command" to `<SDK_ROOT>\bin\x64\nvigi.codeagentlua.exe`
+2. Set "Command" to `<SDK_ROOT>\bin\x64\Release\nvigi.codeagentlua.exe`
 3. Set "Command Arguments" to `data/nvigi.models data/nvigi.test/nvigi.codeagentlua/codeagent_prompt_lua.txt`
-4. Set "Working Directory" to `<SDK_ROOT>/bin/x64`
+4. Set "Working Directory" to `<SDK_ROOT>/bin/x64/Release`
 5. Build and run `copy_sdk_binaries.bat <cfg>` after each build
 
 ### Basic Gameplay

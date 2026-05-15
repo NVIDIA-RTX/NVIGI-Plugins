@@ -4,18 +4,19 @@
 
 # Component packaging configuration for GPT Cloud REST plugin
 # This file is imported by tools/packaging/package.py
+# Component platforms default to win-x64; extend when adding targets (see ALL_PLATFORMS).
 
 def get_components(externals):
     """
     Returns component definitions for this plugin.
     Args:
-        externals: dict of external package definitions from main package.py
+        externals: dict of external package definitions from main package.py (includes DEFAULT_COMPONENT_PLATFORMS, ALL_PLATFORMS).
     """
-    all_plat = ['win-x64']
-    
+    supported_platforms = externals['ALL_PLATFORMS']
+
     components = {
         'gpt.cloud.rest': {
-            'platforms': all_plat,
+            'platforms': supported_platforms,
             'sharedlib': ['nvigi.plugin.gpt.cloud.rest'],
             'docs': ['ProgrammingGuideGPT.md'],
             'includes': ['source/plugins/nvigi.gpt/nvigi_gpt.h'],

@@ -4,8 +4,6 @@
 
 #ifdef NVIGI_WINDOWS
 #include <conio.h>
-#else
-#include <linux/limits.h>
 #endif
 
 #include <cassert>
@@ -37,26 +35,6 @@ namespace fs = std::filesystem;
 
 using json = nlohmann::json;
 
-#if NVIGI_LINUX
-#include <unistd.h>
-#include <dlfcn.h>
-using HMODULE = void*;
-#define GetProcAddress dlsym
-#define FreeLibrary dlclose
-#define LoadLibraryA(lib) dlopen(lib, RTLD_LAZY)
-#define LoadLibraryW(lib) dlopen(nvigi::extra::toStr(lib).c_str(), RTLD_LAZY)
-
-#define sscanf_s sscanf
-#define strcpy_s(a,b,c) strcpy(a,c)
-#define strcat_s(a,b,c) strcat(a,c)
-#define memcpy_s(a,b,c,d) memcpy(a,c,d)
-typedef struct __LUID
-{
-    unsigned long LowPart;
-    long HighPart;
-} 	LUID;
-#endif
-
 #define DECLARE_NVIGI_CORE_FUN(F) PFun_##F* ptr_##F
 #define GET_NVIGI_CORE_FUN(lib, F) ptr_##F = (PFun_##F*)GetProcAddress(lib, #F)
 DECLARE_NVIGI_CORE_FUN(nvigiInit);
@@ -75,13 +53,7 @@ HMODULE lib = nullptr;
 
 inline std::string getExecutablePath()
 {
-#ifdef NVIGI_LINUX
-    char exePath[PATH_MAX] = {};
-    readlink("/proc/self/exe", exePath, sizeof(exePath));
-    std::string searchPathW = exePath;
-    searchPathW.erase(searchPathW.rfind('/'));
-    return searchPathW + "/";
-#else
+#ifdef NVIGI_WINDOWS
     CHAR pathAbsW[MAX_PATH] = {};
     GetModuleFileNameA(GetModuleHandleA(NULL), pathAbsW, ARRAYSIZE(pathAbsW));
     std::string searchPathW = pathAbsW;
@@ -105,6 +77,35 @@ void loggingCallback(nvigi::LogType type, const char* msg)
 #endif
         loggingPrint(type, msg);
 }
+
+inline void trim(std::string& s) 
+{
+    auto first = s.find_first_not_of(" \t\n\r\f\v");
+    if (first == std::string::npos) 
+    {
+        s.clear();
+        return;
+    }
+    auto last = s.find_last_not_of(" \t\n\r\f\v");
+    s = s.substr(first, last - first + 1);
+}
+
+void getPrompt(std::string& s)
+{
+    do {
+        std::cout << "\nUser: ";
+        std::getline(std::cin, s);
+
+        if (std::cin.fail())
+        {
+            s = "exit";
+            return;
+        }
+
+        trim(s);
+    } while (s.empty());
+}
+
 
 template<typename T>
 bool unloadInterface(nvigi::PluginID feature, T*& _interface)
@@ -925,7 +926,7 @@ int main(int argc, char** argv)
 
     //! Fill out the tool instructions. This may change per model - check your model and adjust accordingly.
     std::string full_tool_prompt = std::format("\n\n# Tools\n\n"
-        "You may call one or more functions to assist with the user query.\n\n"
+        "You may use a tool to help answer a user's query. Never use a get_current_temperature call unless the temperature is explicitly asked for.\n\n"
         "You are provided with function signatures within <tools></tools> XML tags:\n"
         "<tools>\n"
         "{}\n"
@@ -939,8 +940,7 @@ int main(int argc, char** argv)
 
     //! Get the user's prompt
     std::string user_prompt;
-    std::cout << "\nUser: ";
-    std::getline(std::cin, user_prompt);
+    getPrompt(user_prompt);
 
     //! whether or not tools are enabled.  User togglable.
     bool tools_enabled = true;
@@ -973,6 +973,7 @@ int main(int argc, char** argv)
             //! So we loop until we finish matching all tool_call requests.  Consider limiting number of tool_calls as 
             //! a precaution to avoid unending loops.  Omitted here for clarity.
             bool regex_match = true;
+            uint32_t loop_count = 0;
             while (regex_match)
             {
                 std::regex re("<tool_call>([\\s\\S]*?)</tool_call>");
@@ -987,6 +988,17 @@ int main(int argc, char** argv)
                 else
                 {
                     regex_match = false;
+                }
+
+                loop_count++;
+                if (loop_count > 2)
+                {
+                    GetCompletion(nvigiCtx, "", "Do not call any more tools.  Report back your answer to the user as best you can with the information you have.", answer);
+                }
+                else if (loop_count > 4)
+                {
+                    answer = "Apologies - I seem to be stuck only calling tools. Aborting.";
+                    break;
                 }
             }
 
@@ -1005,8 +1017,7 @@ int main(int argc, char** argv)
             std::cout << "Assistant: " << cleaned_answer << std::endl;
         }
 
-        std::cout << "\nUser: ";
-        std::getline(std::cin, user_prompt);
+        getPrompt(user_prompt);
     }
 
     //////////////////////////////////////////////////////////////////////////////

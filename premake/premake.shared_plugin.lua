@@ -1,7 +1,6 @@
 function pluginBasicSetupInternal(name, sdk)
-	kind "SharedLib"
-	targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
-	objdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
+	targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.platform}/%{cfg.buildcfg}")
+	objdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.platform}/%{cfg.buildcfg}")
 
 	files { 
 		coresdkdir .. "source/core/nvigi.api/**.h",
@@ -16,6 +15,7 @@ function pluginBasicSetupInternal(name, sdk)
 		ROOT .. "source/plugins/nvigi."..name.."/versions.h",
 		ROOT .. "source/plugins/nvigi."..name.."/resource.h",
 		ROOT .. "source/plugins/nvigi."..name.."/premake.lua",
+		ROOT .. "source/plugins/nvigi."..name.."/package.py",
 	}
 		
 	includedirs 
@@ -38,6 +38,7 @@ function pluginBasicSetupInternal(name, sdk)
 		vpaths { ["plugin"] = {coresdkdir .. "source/core/nvigi.plugin/**.h",coresdkdir .. "source/core/nvigi.plugin/**.cpp"}}	
 		vpaths { ["version"] = {coresdkdir .. "source/plugins/nvigi."..name.."/resource.h",ROOT .. "source/plugins/nvigi."..name.."/versions.h",ROOT .. "source/plugins/nvigi."..name.."/**.rc"}}
 		vpaths {["premake"] = {ROOT .. "source/plugins/nvigi."..name.."/premake.lua"}}
+		vpaths {["package"] = {ROOT .. "source/plugins/nvigi."..name.."/package.py"}}
 
 		-- Delay load nvcuda.dll if project name contains "cuda" or "trt" so we do not report "errors" on non-nvidia platforms
 		pname = project().name:lower()

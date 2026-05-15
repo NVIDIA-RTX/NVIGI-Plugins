@@ -26,7 +26,7 @@ For more details on the models themselves, please see [Getting Models](NVIGIDeve
 
 Once the models are downloaded, the best thing to do is to quickly see them in action. The SDK release pack includes the NVIGI 3D Sample, which shows how different kinds of GPU-accelerated AI inference features can be executed concurrently with an interactive, GPU-rendered 3D animated scene.
 
-To launch the sample, run `<SDK_ROOT>/bin/x64/nvigi.3d.exe`, either by double-clicking the executable in Windows Explorer or by running it from a command prompt. The sample will launch a window with a 3D scene and a UI on the left side of the window.
+To launch the sample, run `<SDK_ROOT>/bin/x64/Release/nvigi.3d.exe`, either by double-clicking the executable in Windows Explorer or by running it from a command prompt. The sample will launch a window with a 3D scene and a UI on the left side of the window.
 
 For more details on setup and usage of the 3D sample, read the [3D Sample](Samples3D.md#the-3d-sample) page. If you wish to try the NVIGI AI plugins that perform inference by connecting to a cloud instance, follow the instructions in [Setting up the GPT Cloud Plugin](Samples3D.md#setting-up-the-gpt-cloud-plugin).
 

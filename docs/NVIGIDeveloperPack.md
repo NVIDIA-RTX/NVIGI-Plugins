@@ -25,7 +25,6 @@ The supported cloud models in this release include:
 
 | Plugin | Model Name | GUID | Source |
 | ------ | ---------- | ---- | ------ |
-| nvigi.plugin.tts.asqflow-trt | Riva Magpie-TTS-Flow | 81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F | Model in pack |
 | nvigi.plugin.tts.asqflow-ggml | Riva Magpie-TTS-Flow (Q4) | 3D52FDC0-5B6D-48E1-B108-84D308818602 | Model in pack |
 | | Riva Magpie-TTS-Flow (FP16) | 16EEB8EA-55A8-4F40-BECE-CE995AF44101 | Model in pack |
 
@@ -80,11 +79,11 @@ The main documentation for using the pack includes:
 ## Contents of the Developer Pack
 
 The pack consists of:
-- **AI Plugins:** `include` and `bin/x64`
-	- The headers (`include`) and DLLs (`bin/x64`) that comprise the AI Plugin functionalities such as ASR, GPT, and Embedding.
-- **Command-line Samples:** `source/samples` and `bin/x64`
+- **AI Plugins:** `include` and `bin/x64/Release`
+	- The headers (`include`) and DLLs (`bin/x64/Release`) that comprise the AI Plugin functionalities such as ASR, GPT, and Embedding.
+- **Command-line Samples:** `source/samples` and `bin/x64/Release`
 	- Basic, precompiled command-line samples(basic, fcall, pipeline, rag, reload) that run a sequence of AI workloads
-- **3D Sample:** `source/samples/nvigi.3d` and `bin/x64`
+- **3D Sample:** `source/samples/nvigi.3d` and `bin/x64/Release`
 	- A precompiled, runnable 3D+GUI sample that allows easy experimentation with components of the SDK, including speech input and text input to an LLM
 - **Core:** `nvigi_core`
 	- The NVIGI Core components, including the headers, libraries and DLLs that make up the main functionality of NVIGI and basic documentation on the core architecture

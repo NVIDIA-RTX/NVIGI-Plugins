@@ -10,6 +10,8 @@
 #include <nvrhi/d3d12.h>
 #endif
 
+#include "nvtx3/nvtx3.hpp"
+
 using namespace donut;
 using namespace donut::math;
 using namespace donut::engine;
@@ -222,7 +224,7 @@ void NVIGISample::CreateRenderPasses(bool& exposureResetRequired, float lodBias)
 
 void NVIGISample::RenderScene(nvrhi::IFramebuffer* framebuffer)
 {
-
+    nvtx3::scoped_range r{ "RenderScene" };
     // INITIALISE
 
     int windowWidth, windowHeight;

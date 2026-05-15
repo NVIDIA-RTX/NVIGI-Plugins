@@ -69,6 +69,7 @@ DeviceManagerOverride_VK::DeviceManagerOverride_VK()
     optionalExtensions.device.insert("VK_NV_shader_sm_builtins");
     optionalExtensions.device.insert("VK_KHR_shader_integer_dot_product");
     optionalExtensions.device.insert("VK_KHR_pipeline_executable_properties");
+    optionalExtensions.device.insert("VK_KHR_maintenance4");
 
     
     // Add CIG (Compute in Graphics) extensions if CIG is enabled

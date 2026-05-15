@@ -1,7 +1,9 @@
 # The 3D Sample
 
 > **NOTE:**
-> With the 1.5.0 release, the NVIGI 3D Sample has been updated to be based upon the new "Modern C++" (CXX) NVIGI wrappers; it also handles speech recognition asynchronously and in a streamed manner.  The sample is now built as part of the SDK build, and is available in the `<SDK_ROOT>/bin/x64` directory.  The source code for the sample is in the `<SDK_ROOT>/source/samples/nvigi.3d` directory.
+> With the 1.6.0 release, the NVIGI 3D Sample has been updated to focus on the more real-world case of showing only plugins for CPU, cloud and one given GPU inference API, rather than showing all plugins for a given model.  This is because in real-world applications, users will likely want to show only the plugins that are relevant to the inference API they are using for a given feature.  By default, this will be the D3D12 or VK backends, depending upon which rendering API is selected at launch.  To use CUDA-based plugins for GPU inference, use the `-cuda` command-line argument at launch, which will show only CUDA-based plugins for each model.
+
+> With the 1.5.0 release, the NVIGI 3D Sample has been updated to be based upon the new "Modern C++" (CXX) NVIGI wrappers; it also handles speech recognition asynchronously and in a streamed manner.  The sample is now built as part of the SDK build, and is available in the `<SDK_ROOT>/bin/x64/Release` directory.  The source code for the sample is in the `<SDK_ROOT>/source/samples/nvigi.3d` directory.
 
 The 3D sample, `nvigi.3d` combines NVIGI and Donut [https://github.com/NVIDIAGameWorks/donut](https://github.com/NVIDIAGameWorks/donut) to create a sample app demonstrating an NVIGI AI integration.  Using NVIGI, it's possible to support multiple backends within single application. Sample app shows one such usecase using GGML CPU, CUDA, Vulkan and D3D12-based backends. Support for multiple backends ensures application developer can create wide variety of inference pipelines. In the sample, based on user selection, particular type of backend is instantiated and used for inferencing.
 
@@ -43,7 +45,7 @@ If you wish to use the OpenAI cloud models, you will need to generate an OpenAI 
 
 For those using a prebuilt NVIGI binary pack, the sample executable is available immediately and can be run.  For those building from source, building the SDK tree will also build the 3D Sample.
 
-To launch the sample, run `<SDK_ROOT>/bin/x64/nvigi.3d.exe`, either by double-clicking the executable in Windows Explorer or by running it from a command prompt.  The sample will launch a window with a 3D scene and a UI on the left side of the window.
+To launch the sample, run `<SDK_ROOT>/bin/x64/Release/nvigi.3d.exe`, either by double-clicking the executable in Windows Explorer or by running it from a command prompt.  The sample will launch a window with a 3D scene and a UI on the left side of the window.
 
 The sample requires and looks for AI models and rendering media relative to the executable path.  Specifically, it looks for:
 - The models directory, which it finds by starting at the executable directory, looking for `<dir>/data/nvigi.models` such that it contains `nvigi.plugin.gpt.ggml`.  The code will check upward from the executable directory several times to find this.  This is done so that pre-built binary and GitHub source layouts are trivially supported with no user effort.
@@ -148,7 +150,7 @@ The ASR tab (as well as the GPT and TTS tabs) contains:
 
 In Manual mode, the drop-downs show all model/backend pairings available, grouped by model.
 
-Note that both local CUDA and remote cloud backends are shown for the model "llama-3.2-3b-instruct".  There may be multiple available backends for some models.
+Note that both local D3D12 and remote cloud backends are shown for the model "llama-3.2-3b-instruct".  There may be multiple available backends for some models.
 
 Selecting each type of model behaves slightly differently:
 - Selecting locally-available models will immediately load the model from disk.  This will disable the feature until the new model is loaded, as the sample shuts down the previous model before loading the new one.  
@@ -237,15 +239,17 @@ Arguments                        | Effect
 
 Arguments                                                                                 | Effect
 ---                                                                                       | ---
-`-vk`                                                                                       | Use Vulkan for rendering and show only vulkan-compatible NVIGI plugins
-`-width <w>`                                                                               | Sets width
-`-height <h>`                                                                              | Sets height
-`-verbose`                                                                                  | Allows vebose info level logging logging
-`-debug`                                                                                    | Enables NVRHI and Graphics API validation Layer
-`-noSigCheck`                                                                               | Does not do NVIGI dll signiture check 
-`-vsync`                                                                                    | Enables Vsync
-`-maxFrames 100`                                                                            | Sets number of frames to render before the app shuts down
-`-noCIG`                                                                                    | Disable the use of CUDA in Graphics optimization (for debugging/testing purposes)
+`-cuda`                                                                                   | Use CUDA as the GPU inference API and show only CUDA-compatible NVIGI plugins for each model.  By default, D3D12/VK-based plugins are shown for GPU inference, but using this option will show CUDA-based plugins instead, if available for a given model.
+`-noLoad`                                                                                 | Do not select/preload any models at startup.  By default, the sample will select a model for each feature and load it at startup, but this option will skip that process and leave all features inactive until the user selects a model/backend for them in the UI.
+`-vk`                                                                                     | Use Vulkan for rendering and show only vulkan-compatible NVIGI plugins
+`-width <w>`                                                                              | Sets width
+`-height <h>`                                                                             | Sets height
+`-verbose`                                                                                | Allows vebose info level logging logging
+`-debug`                                                                                  | Enables NVRHI and Graphics API validation Layer
+`-noSigCheck`                                                                             | Does not do NVIGI dll signiture check 
+`-vsync`                                                                                  | Enables Vsync
+`-maxFrames 100`                                                                          | Sets number of frames to render before the app shuts down
+`-noCIG`                                                                                  | Disable the use of CUDA in Graphics optimization (for debugging/testing purposes)
 
 ## Notes:
 

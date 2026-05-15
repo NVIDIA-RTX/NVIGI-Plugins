@@ -130,7 +130,7 @@ namespace nvigi
 		static void batch_add_seq(llama_batch& batch, const std::vector<int32_t>& tokens, llama_seq_id seq_id) {
 			size_t n_tokens = tokens.size();
 			for (size_t i = 0; i < n_tokens; i++) {
-				common_batch_add(batch, tokens[i], i, { seq_id }, true);
+				common_batch_add(batch, tokens[i], static_cast<llama_pos>(i), { seq_id }, true);
 			}
 		}
 
@@ -277,7 +277,7 @@ namespace nvigi
 		nvigi::Result embed(llama_context* ctx, llama_model* model, common_params& params, std::vector<float>& embeddings)
 		{
 			// get max number of sequences per batch
-			const int n_seq_max = llama_max_parallel_sequences();
+			const size_t n_seq_max = llama_max_parallel_sequences();
 
 			// Begin NVidia Modification
 			// All params type modifications (i.e. instanceData->params.embedding = true;)
@@ -336,7 +336,7 @@ namespace nvigi
 			struct llama_batch batch = llama_batch_init(n_batch, 0, 1);
 
 			// count number of embeddings
-			int n_embd_count = 0;
+			size_t n_embd_count = 0;
 			if (pooling_type == LLAMA_POOLING_TYPE_NONE) {
 				for (int k = 0; k < n_prompts; k++) {
 					n_embd_count += inputs[k].size();

@@ -37,6 +37,11 @@
 #include "cxx_wrappers/d3d12.hpp"
 #include "cxx_wrappers/vulkan.hpp"
 
+// Needed to avoid pulling in whole of windows.h to use nvtx
+#define MemoryBarrier __faststorefence
+
+#include "nvtx3/nvToolsExt.h"
+
 struct Parameters
 {
     donut::app::DeviceCreationParameters deviceParams;
@@ -94,8 +99,6 @@ struct NVIGIContext
     enum ModelStatus {
         AVAILABLE_LOCALLY,
         AVAILABLE_CLOUD,
-        AVAILABLE_DOWNLOADER, // Not yet supported
-        AVAILABLE_DOWNLOADING, // Not yet supported
         AVAILABLE_MANUAL_DOWNLOAD,
         UNAVAILABLE
     };
@@ -108,7 +111,7 @@ struct NVIGIContext
         std::string m_modelRoot;
         std::string m_url;
         size_t m_vram;
-        std::string m_backend;  // Backend string: "cuda", "d3d12", "vulkan", "cpu", "cloud", "trt"
+        std::string m_backend;  // Backend string: "cuda", "d3d12", "vulkan", "cpu", "cloud"
         ModelStatus m_modelStatus;
     };
 
@@ -133,20 +136,6 @@ struct NVIGIContext
         std::atomic<bool> m_running = false;
         size_t m_vramBudget{};
         bool m_automaticBackendSelection = false;
-        std::mutex m_callbackMutex;
-        std::condition_variable m_callbackCV;
-    };
-
-    // MODERNIZED: Specialized stage info for GPT with modern execution state
-    struct GPTStageInfo : StageInfo
-    {
-        std::atomic<nvigi::gpt::ExecutionState> m_callbackState{nvigi::gpt::ExecutionState::Invalid};
-    };
-
-    // MODERNIZED: Specialized stage info for TTS with modern execution state
-    struct TTSStageInfo : StageInfo
-    {
-        std::atomic<nvigi::tts::ExecutionState> m_callbackState{nvigi::tts::ExecutionState::DataPending};
     };
 
     NVIGIContext() {}
@@ -165,10 +154,10 @@ struct NVIGIContext
 
     bool IsCIGEnabled() const { return m_useCiG; }
 
-    bool AddGPTPlugin(const std::string& backend);
+    bool AddGPTPlugin(const std::string& backend, bool available);
     bool AddGPTCloudPlugin();
-    bool AddASRPlugin(const std::string& backend);
-    bool AddTTSPlugin(const std::string& backend);
+    bool AddASRPlugin(const std::string& backend, bool available);
+    bool AddTTSPlugin(const std::string& backend, bool available);
     
 private:
     // Internal helper to check plugin compatibility by ID
@@ -179,9 +168,14 @@ public:
     void GetVRAMStats(size_t& current, size_t& budget);
 
     void LaunchASR();
+    void StopASR();
+    void PollASR();
+    void ResetGPT();
     void LaunchGPT(std::string prompt);
+    void PollGPT();
     void AppendTTSText(std::string text, bool done);
-    void LaunchTTS(std::string prompt);
+    void LaunchTTS(std::string prompt, bool final);
+    void PollTTS();
 
     bool ModelsComboBox(const std::string& label, bool automatic,
         StageInfo& stage,
@@ -198,28 +192,16 @@ public:
     void ReloadASRModel(PluginModelInfoPtr newInfo);
     void ReloadTTSModel(PluginModelInfoPtr newInfo);
     void FlushInferenceThread();
+    void FlushLoadingThread();
 
-    void FramerateLimit()
-    {
-        if (!m_framerateLimiting)
-            return;
-
-        if (m_framerateTimer.running)
-        {
-            m_framerateTimer.Stop();
-            double leftoverTime = 1000.0 / (double)m_targetFramerate - m_framerateTimer.GetElapsedMiliseconds();
-			if (leftoverTime > 0.0)
-				std::this_thread::sleep_for(std::chrono::milliseconds((int)leftoverTime));
-		}
-        m_framerateTimer.Start();
-    }
+    void FramerateLimit();
     bool m_framerateLimiting = false;
     int m_targetFramerate = 60;
 	SimpleTimer m_framerateTimer;
 
     StageInfo m_asr;
-    GPTStageInfo m_gpt;  // MODERNIZED: Use specialized type with modern execution state
-    TTSStageInfo m_tts;  // MODERNIZED: Use specialized type with modern execution state
+    StageInfo m_gpt;  // MODERNIZED: Use specialized type with modern execution state
+    StageInfo m_tts;  // MODERNIZED: Use specialized type with modern execution state
 
     std::string m_nvdaKey = "";
     std::string m_openAIKey = "";
@@ -309,8 +291,10 @@ public:
     std::string m_systemPromptGPT = "You are a helpful AI agent. Your goal is to provide information about queries.\
         Generate only medium size answers and avoid describing what you are doing physically.\
         Avoid using specific words that are not part of the dictionary.\n"; 
+    bool m_useCUDAInference = false;
 	TTSInferenceContext m_ttsInferenceCtx;
     bool m_useCiG = true;
+	bool m_skipLaunchLoading = false;
 
     int m_adapter = -1;
     
@@ -320,15 +304,23 @@ public:
     // MODERNIZED: Use modern wrappers instead of raw interfaces
     std::unique_ptr<nvigi::gpt::Instance> m_gptInstance;
     std::optional<nvigi::gpt::Instance::Chat> m_gptChat;
+	std::optional<nvigi::gpt::Instance::AsyncOperation> m_gptAsyncOp;
     
     std::unique_ptr<nvigi::asr::Instance> m_asrInstance;
     std::optional<nvigi::asr::Instance::Stream> m_asrStream;
+    std::optional< nvigi::asr::Instance::AsyncOperation> m_asrAsyncOp;
     std::unique_ptr<nvigi::tts::Instance> m_ttsInstance;
-    
+    std::optional< nvigi::tts::Instance::AsyncOperation> m_ttsAsyncOp;
+
     // MODERNIZED: Use unique_ptr with custom deleters for HWI interfaces (auto cleanup)
     std::unique_ptr<nvigi::IHWICuda, std::function<void(nvigi::IHWICuda*)>> m_cig;
     std::unique_ptr<nvigi::IHWICommon, std::function<void(nvigi::IHWICommon*)>> m_hwiCommon;
     
+    size_t m_asrBytesProcessed = 0;
+    std::string m_asrPartialText = "";
+	std::queue<std::tuple<std::string,bool>> m_ttsTexts;
+    bool m_ttsInputDone = false;
+
     std::string m_ttsInput;
 
     bool m_newInferenceSequence = false;
@@ -342,7 +334,6 @@ public:
 
     // MODERNIZED: Use smart pointers for threads
     std::unique_ptr<std::thread> m_inferThread;
-    std::atomic<bool> m_inferThreadRunning = false;
     std::unique_ptr<std::thread> m_loadingThread;
 
     std::vector<int16_t> m_ttsOutputAudio;
@@ -361,6 +352,12 @@ public:
 	SimpleTimer m_asrTimer;
     SimpleTimer m_gptFirstTokenTimer;
     SimpleTimer m_ttsFirstAudioTimer;
+
+    // nvtxRangeStart/End (not scoped_range): begin/end split across send vs poll callbacks.
+    bool m_nvtxGptFirstTokenRangeActive = false;
+    nvtxRangeId_t m_nvtxGptFirstTokenRangeId{};
+    bool m_nvtxTtsFirstAudioRangeActive = false;
+    nvtxRangeId_t m_nvtxTtsFirstAudioRangeId{};
 };
 
 struct cerr_redirect {

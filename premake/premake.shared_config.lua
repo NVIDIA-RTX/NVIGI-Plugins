@@ -1,14 +1,38 @@
+	
 	include ("premake.utils.lua")
 
 	-- _ACTION is the argument you passed into premake5 when you ran it.
 	local project_action = "UNDEFINED"
 	if _ACTION ~= nill then project_action = _ACTION end
 	
+
 	-- Where the project files (vs project, solution, etc) go
 	location( ROOT .. "_project/" .. project_action)
 	configurations { "Debug", "Production", "Release" }
-	platforms { "x64" }
-	architecture "x64"
+	
+
+	newoption {
+		trigger = "x64",
+		description = "Enable building of amd64 (setup.bat passes this by default)"
+	}
+
+	-- True when this premake run should emit x64 project kinds/targets.
+	-- Default ON so `premake5 vs2022 --file=premake.lua` matches legacy single-arch behavior.
+	function premakeX64Targets()
+		if _OPTIONS["x64"] ~= nil then
+			return true
+		end
+		return true
+	end
+
+	if _OPTIONS["x64"] ~= nil then
+		print("Enabling x64 build support")
+		platforms { "x64" }
+	end
+	filter { "platforms:x64" }
+		architecture "x64"
+	filter {}
+
 	language "c++"
 	preferredtoolarchitecture "x86_64"
 	targetprefix ""
@@ -17,8 +41,10 @@
 	artifactsdir = (ROOT .."_artifacts/")
 	coresdkdir = (ROOT .."nvigi_core/")
 
+	-- NVTX before CUDA includes so nvtx3/... resolves to the packman NVTX package (headers under c/include per upstream layout).
 	includedirs 
 	{ 
+		externaldir .. "nvtx/c/include",
 		ROOT .. "include",
 		ROOT,
 		coresdkdir,
@@ -61,7 +87,10 @@
 	-- DO NOT REMOVE, required for security --
 	filter {"system:windows","configurations:Production"}
 			buildoptions {"/guard:ehcont","/guard:cf","/sdl"}		
-			linkoptions {"/HIGHENTROPYVA", "/CETCOMPAT"}			
+			linkoptions {"/HIGHENTROPYVA"}			
+	filter{}
+	filter {"system:windows","configurations:Production", "platforms:x64"}
+			linkoptions {"/CETCOMPAT"}			
 	filter{}
 
     filter {"system:windows"}
@@ -73,30 +102,14 @@
 		defines {
 			"_CRT_SECURE_NO_WARNINGS"
 		}				
-    filter {"system:linux"}
-		defines { "NVIGI_SDK", "NVIGI_LINUX" }
-		-- stop on first error
-		buildoptions {"-std=c++2b", "-Wfatal-errors","-fPIC", "-Wall", "-Wextra" , "-Wpedantic", "-Wcast-qual", "-Wdouble-promotion",
-				      "-Wshadow",  "-Wpointer-arith", "-pthread", "-march=native", "-mtune=native", "-fvisibility=hidden","-finput-charset=UTF-8", "-fexec-charset=UTF-8"}					  
-        linkoptions { "-Wl,--no-undefined" }
-		-- Plug-ins should try to isolate themselves as much as possible from the environment.
-		-- Using -Bsymbolic makes sure the plug-in will use symbols defined by the (static)
-		-- libraries it uses.
-		-- --exclude-libs,ALL will make sure symbols from static libraries are not weak symbols
-		-- which can be overridden at run time.  Using linker scripts would be another way
-		-- to get full control over this.
-		linkoptions { "-Bsymbolic", "-Wl,--exclude-libs,ALL" }
-    filter { "files:**.cpp", "system:linux"}
-    	buildoptions {"-fpermissive","-Wstrict-prototypes","-Wmissing-prototypes"}
 	-- when building any visual studio project
 	filter {"system:windows", "action:vs*"}
-		flags { "MultiProcessorCompile", "NoMinimalRebuild"}		
+		multiprocessorcompile "On"
+		minimalrebuild "Off"
     filter {}
 
     filter {"system:windows"}
 		cppdialect "C++latest"
-	filter {"system:linux"}
-		cppdialect "C++2a"
 	filter {} 
 	
 	filter "configurations:not Production"
@@ -104,8 +117,6 @@
 	filter "configurations:Debug"
 		defines { "DEBUG", "_DEBUG", "NVIGI_ENABLE_TIMING=1", "NVIGI_DEBUG", "NVIGI_VALIDATE_MEMORY" }
 		symbols "Full"
-	filter {"configurations:Debug","system:linux"} 
-		buildoptions {"-g", "-O0"}
 	filter {} 
 				
 	filter "configurations:Release"
@@ -117,9 +128,10 @@
 		defines { "NDEBUG","NVIGI_ENABLE_TIMING=0","NVIGI_ENABLE_PROFILING=0","NVIGI_PRODUCTION" }
 		optimize "On"
 		symbols "On"
-		flags { "LinkTimeOptimization" }
+		linktimeoptimization "On"
 
 	filter {} -- clear filter when you know you no longer need it!
+
 
 	filter {"system:windows"}
 		defines { 
@@ -127,13 +139,6 @@
 			"NVIGI_DEF_MIN_OS_MINOR=0",
 			"NVIGI_DEF_MIN_OS_BUILD=19041"
 		}
-    filter {"system:linux"}
-		defines { 
-			"NVIGI_DEF_MIN_OS_MAJOR=20",
-			"NVIGI_DEF_MIN_OS_MINOR=04",
-			"NVIGI_DEF_MIN_OS_BUILD=0"
-		}
-	filter {}
     filter {"system:windows"}
 		defines { 
 			"NVIGI_CUDA_MIN_GPU_ARCH=0x00000140",
@@ -143,12 +148,5 @@
 			"NVIGI_D3D12_MIN_DRIVER_MAJOR=580",
 			"NVIGI_D3D12_MIN_DRIVER_MINOR=61",
 			"NVIGI_D3D12_MIN_DRIVER_BUILD=0"
-		}
-    filter {"system:linux"}
-		defines { 
-			"NVIGI_CUDA_MIN_GPU_ARCH=0x00000140",
-			"NVIGI_CUDA_MIN_DRIVER_MAJOR=531",
-			"NVIGI_CUDA_MIN_DRIVER_MINOR=14",
-			"NVIGI_CUDA_MIN_DRIVER_BUILD=0"
 		}
 	filter {}

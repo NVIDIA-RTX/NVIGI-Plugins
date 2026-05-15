@@ -21,7 +21,6 @@ The TTS sample requires the following model:
 
 | Plugin | Model Name | GUID |
 | ------ | ---------- | ---- |
-| nvigi.plugin.tts.asqflow-trt | Riva Magpie-TTS-Flow | 81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F |
 | nvigi.plugin.tts.asqflow-ggml.* | Riva Magpie-TTS-Flow (GGML) | 16EEB8EA-55A8-4F40-BECE-CE995AF44101 |
 
 **Important**: You also need a target voice spectrogram file. The SDK test data includes sample spectrograms in `<SDK_TEST>/nvigi.tts/asqflow/mel_spectrograms_targets/`.
@@ -36,7 +35,7 @@ The sample is built as part of the SDK build process. After building, copy the b
 copy_sdk_binaries.bat <cfg>
 ```
 
-This ensures all DLLs and the executable are in the same directory (`bin\x64`).
+This ensures all DLLs and the executable are in the same directory (`bin\x64\Release`).
 
 ## How to Use the TTS Sample
 
@@ -46,13 +45,13 @@ This ensures all DLLs and the executable are in the same directory (`bin\x64`).
 2. Run the command:
 
 ```sh
-bin\x64\nvigi.basic.tts.cxx.exe --models <SDK_MODELS> --sdk bin\x64 --target <SDK_TEST>/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin
+bin\x64\Release\nvigi.basic.tts.cxx.exe --models <SDK_MODELS> --sdk bin\x64\Release --target <SDK_TEST>/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin
 ```
 
 3. In a standard layout binary development pack or GitHub source tree:
 
 ```sh
-bin\x64\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64 --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin
+bin\x64\Release\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin
 ```
 
 4. The sample will generate speech for the default text and save it to `output.wav`
@@ -63,7 +62,7 @@ bin\x64\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64 --targe
 To hear the generated speech in real-time as it's being generated:
 
 ```sh
-bin\x64\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64 --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin --play
+bin\x64\Release\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin --play
 ```
 
 ### Async Mode (Non-Blocking)
@@ -71,7 +70,7 @@ bin\x64\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64 --targe
 For game integration or when you need to continue other processing:
 
 ```sh
-bin\x64\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64 --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin --async --play
+bin\x64\Release\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin --async --play
 ```
 
 ## Command Line Options
@@ -103,55 +102,55 @@ Usage: nvigi.basic.tts.cxx [options]
 ### Generate speech with custom text:
 
 ```sh
-bin\x64\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64 --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin --text "Welcome to the NVIGI SDK text to speech system."
+bin\x64\Release\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin --text "Welcome to the NVIGI SDK text to speech system."
 ```
 
 ### Use a different voice:
 
 ```sh
-bin\x64\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64 --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/01_F-Jennifer_20s_se.bin --text "Hello world!"
+bin\x64\Release\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/01_F-Jennifer_20s_se.bin --text "Hello world!"
 ```
 
 ### Adjust speech speed (slower):
 
 ```sh
-bin\x64\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64 --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin --speed 0.75
+bin\x64\Release\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin --speed 0.75
 ```
 
 ### Adjust speech speed (faster):
 
 ```sh
-bin\x64\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64 --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin --speed 1.5
+bin\x64\Release\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin --speed 1.5
 ```
 
 ### Higher quality (more timesteps, slower):
 
 ```sh
-bin\x64\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64 --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin --timesteps 32
+bin\x64\Release\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin --timesteps 32
 ```
 
 ### Lower quality (fewer timesteps, faster):
 
 ```sh
-bin\x64\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64 --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin --timesteps 16
+bin\x64\Release\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin --timesteps 16
 ```
 
 ### Use Vulkan backend:
 
 ```sh
-bin\x64\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64 --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin --backend vulkan
+bin\x64\Release\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin --backend vulkan
 ```
 
 ### Spanish language:
 
 ```sh
-bin\x64\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64 --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin --language es --text "Hola mundo"
+bin\x64\Release\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin --language es --text "Hola mundo"
 ```
 
 ### Save to custom output file:
 
 ```sh
-bin\x64\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64 --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin --output my_speech.wav
+bin\x64\Release\nvigi.basic.tts.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --target data/nvigi.test/nvigi.tts/asqflow/mel_spectrograms_targets/03_M-Tom_Sawyer_15s_se.bin --output my_speech.wav
 ```
 
 ## Audio Format
@@ -285,9 +284,9 @@ To run `nvigi.basic.tts.cxx` in the debugger:
 1. One-time setup in the project file:
     1. In the MSVC IDE, edit the project config settings for `nvigi/samples/nvigi.basic.cxx/tts`
     1. Navigate to the "Debugging" settings
-    1. Set "Command" to `<SDK_ROOT>\bin\x64\nvigi.basic.tts.cxx.exe`
+    1. Set "Command" to `<SDK_ROOT>\bin\x64\Release\nvigi.basic.tts.cxx.exe`
     1. Set "Command Arguments" as needed (see command line options above)
-    1. Set "Working Directory" to `<SDK_ROOT>/bin/x64`
+    1. Set "Working Directory" to `<SDK_ROOT>/bin/x64/Release`
 1. Build the desired non-production config; Release is recommended
 1. After each (re-)build, re-run `copy_sdk_binaries.bat <cfg>`
 1. The sample can now be run in the debugger

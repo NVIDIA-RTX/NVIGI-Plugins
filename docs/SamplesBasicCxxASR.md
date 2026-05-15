@@ -31,7 +31,7 @@ The sample is built as part of the SDK build process. After building, copy the b
 copy_sdk_binaries.bat <cfg>
 ```
 
-This ensures all DLLs and the executable are in the same directory (`bin\x64`).
+This ensures all DLLs and the executable are in the same directory (`bin\x64\Release`).
 
 ## How to Use the ASR Sample
 
@@ -43,13 +43,13 @@ In this mode, you record a fixed duration (5 seconds) of audio and then transcri
 2. Run the command:
 
 ```sh
-bin\x64\nvigi.basic.asr.cxx.exe --models <SDK_MODELS> --sdk bin\x64
+bin\x64\Release\nvigi.basic.asr.cxx.exe --models <SDK_MODELS> --sdk bin\x64\Release
 ```
 
 3. In a standard layout binary development pack or GitHub source tree:
 
 ```sh
-bin\x64\nvigi.basic.asr.cxx.exe --models data/nvigi.models --sdk bin\x64
+bin\x64\Release\nvigi.basic.asr.cxx.exe --models data/nvigi.models --sdk bin\x64\Release
 ```
 
 4. At the prompt, press enter with no text to start a 5-second recording
@@ -64,7 +64,7 @@ Streaming mode provides real-time continuous audio streaming with incremental tr
 1. Run the sample with the `--streaming` flag:
 
 ```sh
-bin\x64\nvigi.basic.asr.cxx.exe --models data/nvigi.models --sdk bin\x64 --streaming
+bin\x64\Release\nvigi.basic.asr.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --streaming
 ```
 
 2. At the prompt, press enter with no text to start real-time streaming
@@ -99,25 +99,25 @@ Usage: nvigi.basic.asr.cxx [options]
 ### Basic transcription with English language:
 
 ```sh
-bin\x64\nvigi.basic.asr.cxx.exe --models data/nvigi.models --sdk bin\x64 --language en
+bin\x64\Release\nvigi.basic.asr.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --language en
 ```
 
 ### Auto-detect language and translate to English:
 
 ```sh
-bin\x64\nvigi.basic.asr.cxx.exe --models data/nvigi.models --sdk bin\x64 --detect-lang --translate
+bin\x64\Release\nvigi.basic.asr.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --detect-lang --translate
 ```
 
 ### Use Vulkan backend with streaming mode:
 
 ```sh
-bin\x64\nvigi.basic.asr.cxx.exe --models data/nvigi.models --sdk bin\x64 --backend vulkan --streaming
+bin\x64\Release\nvigi.basic.asr.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --backend vulkan --streaming
 ```
 
 ### Save recorded audio to a WAV file:
 
 ```sh
-bin\x64\nvigi.basic.asr.cxx.exe --models data/nvigi.models --sdk bin\x64 --save-wav recording.wav
+bin\x64\Release\nvigi.basic.asr.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --save-wav recording.wav
 ```
 
 ## Audio Format
@@ -161,9 +161,9 @@ To run `nvigi.basic.asr.cxx` in the debugger:
 1. One-time setup in the project file:
     1. In the MSVC IDE, edit the project config settings for `nvigi/samples/nvigi.basic.cxx/asr`
     1. Navigate to the "Debugging" settings
-    1. Set "Command" to `<SDK_ROOT>\bin\x64\nvigi.basic.asr.cxx.exe`
+    1. Set "Command" to `<SDK_ROOT>\bin\x64\Release\nvigi.basic.asr.cxx.exe`
     1. Set "Command Arguments" as needed (see command line options above)
-    1. Set "Working Directory" to `<SDK_ROOT>/bin/x64`
+    1. Set "Working Directory" to `<SDK_ROOT>/bin/x64/Release`
 1. Build the desired non-production config; Release is recommended
 1. After each (re-)build, re-run `copy_sdk_binaries.bat <cfg>`
 1. The sample can now be run in the debugger

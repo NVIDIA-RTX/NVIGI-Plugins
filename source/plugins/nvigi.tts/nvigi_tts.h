@@ -14,13 +14,6 @@ namespace plugin
 {
 namespace tts
 {
-namespace asqflow_trt
-{
-constexpr PluginID kId = {{0x97b630c1, 0x1739, 0x4a6a, {0x9f, 0xce, 0x60, 0x73, 0xf6, 0xe8, 0x9a, 0x69}},
-                          0xbbf95e}; //{97B630C1-1739-4A6A-9FCE-6073F6E89A69} [nvigi.plugin.tts.asqflow-trt]
-
-} // namespace asqflow_trt
-
 namespace asqflow_ggml
 {
 namespace cuda
@@ -44,12 +37,6 @@ constexpr const char *kTTSDataSlotInputText = "text";
 constexpr const char *kTTSDataSlotInputTargetSpectrogramPath = "target_spec";
 constexpr const char *kTTSDataSlotOutputAudio = "audio";
 constexpr const char *kTTSDataSlotOutputTextNormalized = "text_normalized";
-
-// Custom Exceptions
-constexpr uint32_t kResultErrorG2pModelASqFlow = 1 << 24 | plugin::tts::asqflow_trt::kId.crc24;
-constexpr uint32_t kResultErrorDpModel = 2 << 24 | plugin::tts::asqflow_trt::kId.crc24;
-constexpr uint32_t kResultErrorGeneratorModel = 3 << 24 | plugin::tts::asqflow_trt::kId.crc24;
-constexpr uint32_t kResultErrorVocoderModel = 4 << 24 | plugin::tts::asqflow_trt::kId.crc24;
 
 constexpr const char *END_PROMPT_ASYNC =
     "END_PROMPT_ASYNC"; // string to signify that we finished sending asynchronous evaluation

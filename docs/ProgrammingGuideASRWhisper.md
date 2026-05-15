@@ -6,6 +6,8 @@ Please read the [Programming Guide for AI](nvigi_core/docs/ProgrammingGuideAI.md
 
 > **MIN RUNTIME SPEC:** Note that all Whisper ASR backends require a CPU supporting AVX2 instructions.  Support for this instruction extension is ubiquitous in modern gaming CPUs, but older hardware may not support it.
 
+> **NOTE**: It is best to use one GPU inference API (CUDA, Vulkan or D3D12) per application run/process and not switch between them at runtime for optimal performance and stability.
+
 > **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the SDK's Basic command line sample [Source Code](../source/samples/nvigi.basic/basic.cpp) and [Docs](Samples.md).  The Basic command-line sample includes the option to record audio and converting it to a text query for an LLM via the ASR plugins.
 
 > **IMPORTANT NOTE: The D3D12 backend (nvigi.plugin.asr.ggml.d3d12.dll) is provided only precompiled as a part of the downloadable binary pack (`nvigi_pack`).  It is not possible for developers to compile the D3D12 backend plugin from source in this release.**
@@ -231,6 +233,206 @@ The wrapper automatically:
 - Manages interface lifetimes
 - Provides clear error messages via `std::expected`
 - Cleans up resources when destroyed
+
+### 3.4 CUSTOM MODEL LOADING WITH EMBEDDED JSON AND FILEIO CALLBACKS
+
+In addition to the traditional model loading approach (using `modelGUID` and `utf8PathToModels` to scan directories), NVIGI supports a custom loading mechanism using **embedded model card JSON** with **FileIOCallbacks**. This approach is useful when:
+
+- You want to embed model configuration directly in your application
+- Models are loaded from custom locations (memory, archives, encrypted storage, network, etc.)
+- You need more control over file I/O operations
+- You want to avoid directory scanning and specify exact file paths
+
+#### Key Differences from Traditional Loading
+
+**Traditional Approach:**
+- Requires `common.modelGUID` (e.g., `"{5CAD3A03-1272-4D43-9F3D-655417526170}"`)
+- Requires `common.utf8PathToModels` (path to model repository)
+- SDK scans directories to find model JSON files
+- SDK loads GGUF files from discovered locations
+
+**Custom Embedded JSON Approach:**
+- `common.modelGUID` is **empty** or **NULL**
+- `common.utf8PathToModels` is **empty** or **NULL**
+- `common.modelCardJSON` contains **embedded JSON string**
+- JSON includes `"local_files"` array with full paths to GGUF models
+- `FileIOCallbacks` are used to load files (can use default or custom implementations)
+
+#### Embedded JSON Format
+
+The embedded JSON should follow this structure:
+
+```json
+{
+  "name": "whisper small",
+  "guid": "{5CAD3A03-1272-4D43-9F3D-655417526170}",
+  "vram": 1024,
+  "n_layers": 24,
+  "local_files": [
+    "/full/path/to/ggml-small.bin"
+  ]
+}
+```
+
+**Important JSON fields:**
+- `guid`: Model identifier (for reference)
+- `vram`: VRAM requirement in MB
+- `n_layers`: Number of model layers
+- **`local_files`**: Array of full paths to GGUF/BIN model files to load
+- Other fields from standard model JSON can be included
+
+#### C API Example
+
+```cpp
+// Embedded model card JSON (can be loaded from anywhere)
+const char* embeddedModelJSON = R"({
+  "name": "whisper small",
+  "guid": "{5CAD3A03-1272-4D43-9F3D-655417526170}",
+  "vram": 1024,
+  "n_layers": 24,
+  "local_files": [
+    "D:/models/whisper/ggml-small.bin"
+  ]
+})";
+
+nvigi::InferenceInstance* asrInstance;
+{
+    nvigi::CommonCreationParameters common{};
+    nvigi::ASRWhisperCreationParameters params{};
+    
+    // IMPORTANT: Leave modelGUID and utf8PathToModels empty when using embedded JSON
+    common.modelGUID = nullptr;              // NULL - using embedded JSON
+    common.utf8PathToModels = nullptr;       // NULL - using embedded JSON
+    common.modelCardJSON = embeddedModelJSON; // Set embedded JSON
+    common.numThreads = 8;
+    common.vramBudgetMB = 2048;
+    
+    if(NVIGI_FAILED(params.chain(common)))
+    {
+        // Handle error
+    }
+    
+    // Setup FileIOCallbacks for custom file loading
+    // You can provide custom callbacks or use default file operations
+    nvigi::FileIOCallbacks ioCallbacks{};
+    ioCallbacks.userData = nullptr;
+    ioCallbacks.open = myCustomOpen;    // Your custom open function
+    ioCallbacks.close = myCustomClose;  // Your custom close function
+    ioCallbacks.size = myCustomSize;    // Your custom size function
+    ioCallbacks.tell = myCustomTell;    // Your custom tell function
+    ioCallbacks.seek = myCustomSeek;    // Your custom seek function
+    ioCallbacks.read = myCustomRead;    // Your custom read function
+    // ... other callbacks
+    
+    if(NVIGI_FAILED(params.chain(ioCallbacks)))
+    {
+        // Handle error
+    }
+    
+    // Chain D3D12 or Vulkan parameters as usual
+    nvigi::D3D12Parameters d3d12Params{};
+    // ... setup d3d12Params ...
+    if(NVIGI_FAILED(params.chain(d3d12Params)))
+    {
+        // Handle error
+    }
+    
+    if(NVIGI_FAILED(res, iasr->createInstance(params, &asrInstance)))
+    {
+        LOG("Failed to create instance with embedded JSON");
+    }
+}
+```
+
+#### Modern C++ Wrapper Example
+
+The C++ wrapper simplifies this further:
+
+```cpp
+#include "asr.hpp"
+#include "io_helpers.hpp"
+
+using namespace nvigi::asr;
+
+// Embedded model card JSON
+constexpr const char* kEmbeddedModelJSON = R"({
+  "name": "whisper small",
+  "guid": "{5CAD3A03-1272-4D43-9F3D-655417526170}",
+  "vram": 1024,
+  "n_layers": 24,
+  "local_files": [
+    "D:/models/whisper/ggml-small.bin"
+  ]
+})";
+
+// Create instance with embedded JSON
+auto instance = Instance::create(
+    ModelConfig{
+        .backend = "cuda",
+        .guid = "",                        // Empty - using embedded JSON
+        .model_path = "",                  // Empty - using embedded JSON
+        .model_card_json = kEmbeddedModelJSON,  // Set embedded JSON
+        .num_threads = 8,
+        .vram_budget_mb = 2048,
+        .flash_attention = true,
+        .language = "en",
+        .translate = false,
+        .detect_language = false
+    },
+    d3d12_config,
+    vk_config,
+    nvigi::io::create_file_wrapper_io(),  // Use default file I/O
+    core.loadInterface(),
+    core.unloadInterface()
+).value();
+```
+
+**Using Custom FileIOCallbacks:**
+
+```cpp
+// Create custom IO config for loading from memory, network, etc.
+nvigi::io::IOConfig io_config;
+io_config.enable_custom_io = true;
+io_config.open = [](void* ctx, const char* path, const char* mode) -> void* {
+    // Your custom open implementation
+    return myMemoryBufferOpen(path);
+};
+io_config.read = [](void* ctx, void* handle, void* buffer, size_t size) -> size_t {
+    // Your custom read implementation
+    return myMemoryBufferRead(handle, buffer, size);
+};
+// ... implement other required callbacks ...
+
+auto instance = Instance::create(
+    ModelConfig{
+        .backend = "cuda",
+        .model_card_json = kEmbeddedModelJSON,
+        // ... other config ...
+    },
+    d3d12_config,
+    vk_config,
+    io_config,  // Use custom IO
+    core.loadInterface(),
+    core.unloadInterface()
+).value();
+```
+
+#### Important Notes
+
+1. **Either/Or, Not Both**: Use **either** (`modelGUID` + `utf8PathToModels`) **OR** `modelCardJSON`, never both
+2. **FileIOCallbacks Required**: When using `modelCardJSON`, FileIOCallbacks must be provided (use default or custom)
+3. **Full Paths Required**: The `"local_files"` array must contain full absolute paths to model files
+4. **JSON Validity**: The embedded JSON must be valid and contain all required fields
+5. **Whisper Models**: Whisper models typically use `.bin` extension (e.g., `ggml-small.bin`)
+6. **Same Backend Support**: All backends (CUDA, D3D12, Vulkan, CPU) support this approach
+
+#### Benefits
+
+- **Portable**: Model configuration travels with your application
+- **Flexible**: Load models from any source (memory, network, archives, etc.)
+- **No Directory Scanning**: Direct file loading is faster
+- **Custom I/O**: Full control over file operations for encryption, compression, etc.
+- **Embedded Configs**: No external JSON files required
 
 ## 4.0 AUDIO INPUT
 

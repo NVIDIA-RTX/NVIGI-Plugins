@@ -20,12 +20,12 @@ The NVIDIA IGI Developer Pack is a release of several components: the IGI Core A
 - GGML-based LLMs on CPU or GPU (CUDA, D3D12 or Vulkan) [https://github.com/ggerganov/ggml](https://github.com/ggerganov/ggml)
 - GGML-based Speech Recognition on CPU or GPU (CUDA, D3D12 or Vulkan) [https://github.com/ggerganov/whisper.cpp](https://github.com/ggerganov/whisper.cpp)
 - GGML-based embeddings on CPU or GPU (CUDA)
-- GGML- or TensorRT-based Text-to-Speech (TTS) via Riva Magpie Flow (was ASquaredFlow) on GPU (CUDA or Vulkan)
+- GGML-based Text-to-Speech (TTS) via Riva Magpie Flow (was ASquaredFlow) on GPU (CUDA or Vulkan)
 - NVIDIA Cloud-based GPT/LLM inference via [https://build.nvidia.com/explore/discover](https://build.nvidia.com/explore/discover)
 - GPU scheduling optimizations with 3D workloads [nvigi_core/docs/GpuSchedulingForAI](nvigi_core/docs/GpuSchedulingForAI)
 
 In addition, several samples exist in two locations. Source code for the samples is provided and precompiled, which allow for instant experimentation with the plugins.:
-- Command-line samplesfor specific plugins, located in `source/samples` with (pre-)built binaries in `bin/x64`.  These include:
+- Command-line samplesfor specific plugins, located in `source/samples` with (pre-)built binaries in `bin/x64/Release`.  These include:
   - [Basic (nvigi.basic)](SamplesBasic.md): A command-line sample that shows the use of individual ASR, GPT and TTS plugins to implement conversational AI.  The user can provide input by typing their queries or by using a microphone to pass their verbal query to speech recognition.  The GPT plugin will respond to the query, with conversational context.  The GPT plugin may be switched from local to cloud models via the command line.  The response will then be turned into audio via TTS and played to the audio output
   - **C++ Basic Samples**: Modern C++ wrapper-based samples demonstrating individual plugin usage with async/polling APIs, perfect for game integration:
     - [Basic ASR (nvigi.basic.cxx.asr)](SampleBasicCxxASR.md): Demonstrates automatic speech recognition with both complete audio mode and real-time streaming. Shows microphone recording, transcription, language detection, translation, and WAV file export.

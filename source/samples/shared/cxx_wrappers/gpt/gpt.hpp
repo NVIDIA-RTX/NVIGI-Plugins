@@ -423,8 +423,15 @@ struct CloudConfig {
 // Specialized model configs that inherit from base ModelConfig
 struct ModelConfig {
     std::string_view backend;
+    
+    // Traditional approach: guid + model_path
     std::string_view guid;
     std::string_view model_path;
+    
+    // Alternative approach: embedded JSON (use one or the other, not both)
+    // When model_card_json is set, guid and model_path should be empty
+    std::string_view model_card_json;
+    
     int32_t context_size{ 4096 };
     int32_t num_threads{ 1 };
     size_t vram_budget_mb{ 0 };
@@ -441,6 +448,10 @@ struct ModelConfig {
     }
     ModelConfig& set_vram(size_t mb) {
         vram_budget_mb = mb;
+        return *this;
+    }
+    ModelConfig& set_model_card_json(std::string_view json) {
+        model_card_json = json;
         return *this;
     }
 };
@@ -478,6 +489,7 @@ public:
     struct InterfaceManager {
         static inline IGeneralPurposeTransformer* igpt{nullptr};
         static inline IPolledInferenceInterface* ipolled{nullptr};
+        static inline IGPTSessionState* iSessionState{nullptr};
         static inline std::mutex mutex;
         static inline int reference_count{0};
         static inline std::string current_backend;
@@ -572,14 +584,21 @@ public:
                             config.backend, loc.file_name(), loc.line())
                     ));
                 }
-                
+
+                // Session state (KV save/restore) - optional, only GGML backend provides it
+                (void)nvigiGetInterfaceDynamic(
+                    instance->impl_->plugin_id,
+                    &InterfaceManager::iSessionState,
+                    loader, plugin_path.empty() ? nullptr : plugin_path.data()
+                );
+
                 InterfaceManager::current_backend = std::string(config.backend);
             }
             
             InterfaceManager::reference_count++;
         }
 
-        // Chain parameters
+        // All parameters we could need
         CommonCreationParameters common{};
         GPTCreationParameters params{};
         D3D12Parameters d3d12params{};
@@ -587,16 +606,26 @@ public:
         RESTParameters restparams{};
         
         // Chain parameters (unused are simply ignored)
-        d3d12params.chain(common);        
-        common.chain(params);
-        params.chain(restparams);
-        restparams.chain(vkparams);
+        d3d12params.chain(vkparams);
+        vkparams.chain(restparams);
+        restparams.chain(params);
+        params.chain(common);
 
         // Set base parameters
-        common.utf8PathToModels = config.model_path.data();
+        // Use either traditional approach (guid + path) OR embedded JSON (not both)
+        if (!config.model_card_json.empty()) {
+            // Embedded JSON approach - guid and path should be empty
+            common.utf8PathToModels = "";
+            common.modelGUID = "";
+            common.modelCardJSON = config.model_card_json.data();
+        } else {
+            // Traditional approach - use guid and path
+            common.utf8PathToModels = config.model_path.data();
+            common.modelGUID = config.guid.data();
+            common.modelCardJSON = nullptr;
+        }
         common.numThreads = config.num_threads;
         common.vramBudgetMB = config.vram_budget_mb;
-        common.modelGUID = config.guid.data();
 
         params.contextSize = config.context_size;
         params.flashAttention = config.flash_attention;
@@ -623,6 +652,7 @@ public:
             }
 
             restparams.url = cloud_config.url.empty() ? ccaps->url : cloud_config.url.data();
+            restparams.allowHTTP = true;
             restparams.authenticationToken = cloud_config.token.data();
             restparams.verboseMode = cloud_config.verbose;
             restparams.useStreaming = cloud_config.streaming;
@@ -655,7 +685,7 @@ public:
         nvigi::io::configure_io_callbacks(common, io_config);
 
         auto creation_result = InterfaceManager::igpt->createInstance(
-            d3d12params,
+            d3d12params, // root of our chained parameters
             &instance->impl_->instance
         );
         
@@ -666,8 +696,12 @@ public:
             if (InterfaceManager::reference_count == 0) {
                 instance->impl_->unloader(instance->impl_->plugin_id, InterfaceManager::igpt);
                 instance->impl_->unloader(instance->impl_->plugin_id, InterfaceManager::ipolled);
+                if (InterfaceManager::iSessionState) {
+                    instance->impl_->unloader(instance->impl_->plugin_id, InterfaceManager::iSessionState);
+                }
                 InterfaceManager::igpt = nullptr;
                 InterfaceManager::ipolled = nullptr;
+                InterfaceManager::iSessionState = nullptr;
                 InterfaceManager::current_backend.clear();
             }
             return std::unexpected(Error("Failed to create inference instance"));
@@ -689,8 +723,12 @@ public:
                 // Release interfaces when all instances are destroyed
                 impl_->unloader(impl_->plugin_id, InterfaceManager::igpt);
                 impl_->unloader(impl_->plugin_id, InterfaceManager::ipolled);
+                if (InterfaceManager::iSessionState) {
+                    impl_->unloader(impl_->plugin_id, InterfaceManager::iSessionState);
+                }
                 InterfaceManager::igpt = nullptr;
                 InterfaceManager::ipolled = nullptr;
+                InterfaceManager::iSessionState = nullptr;
                 InterfaceManager::current_backend.clear();
             }
         }
@@ -716,6 +754,55 @@ public:
         std::string grammar_copy;  // Store grammar string to keep it alive
         std::string session_cache_path_copy;  // Store session cache path to keep it alive
     };
+
+    //! True if this backend supports session state (KV save/restore); GGML only (per-sequence / slot).
+    bool has_session_state() const {
+        return InterfaceManager::iSessionState != nullptr
+            && InterfaceManager::iSessionState->seq_get_data_size != nullptr;
+    }
+
+    //! Required buffer size for save_seq_state. Returns 0 if not supported or session not idle.
+    size_t get_seq_data_size() const {
+        if (!has_session_state() || !impl_->instance)
+        {
+            return 0;
+        }
+        auto* iface = InterfaceManager::iSessionState;
+        if (!iface->seq_get_data_size)
+        {
+            return 0;
+        }
+        return iface->seq_get_data_size(impl_->instance);
+    }
+
+    //! Save this session's llama sequence state into buffer. Returns bytes written, or nullopt if not supported / empty buffer / error.
+    std::optional<size_t> save_seq_state(unsigned char* buffer, size_t buffer_size, int* out_n_past) {
+        if (!has_session_state() || !impl_->instance || !buffer || !out_n_past || buffer_size == 0)
+        {
+            return std::nullopt;
+        }
+        auto* iface = InterfaceManager::iSessionState;
+        if (!iface->seq_get_data)
+        {
+            return std::nullopt;
+        }
+        size_t n = iface->seq_get_data(impl_->instance, buffer, buffer_size, out_n_past);
+        return n > 0 ? std::optional<size_t>(n) : std::nullopt;
+    }
+
+    //! Restore session sequence state from buffer. n_past must match save_seq_state. No-op (returns false) if not supported or buffer empty.
+    bool restore_seq_state(const unsigned char* buffer, size_t buffer_size, int n_past) {
+        if (!has_session_state() || !impl_->instance || !buffer || buffer_size == 0)
+        {
+            return false;
+        }
+        auto* iface = InterfaceManager::iSessionState;
+        if (!iface->seq_set_data)
+        {
+            return false;
+        }
+        return iface->seq_set_data(impl_->instance, buffer, buffer_size, n_past);
+    }
 
     Result generate(
         std::string_view system_msg,
@@ -1342,6 +1429,8 @@ public:
         // Access runtime config for modification
         RuntimeConfig& runtime_config() { return config_; }
         const RuntimeConfig& runtime_config() const { return config_; }
+        Instance& get_instance() { return instance_; }
+        const Instance& get_instance() const { return instance_; }
         
     private:
         friend class Instance;

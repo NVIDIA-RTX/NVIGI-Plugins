@@ -31,8 +31,10 @@
 #include "source/utils/nvigi.hwi/cuda/push_poppable_cuda_context.h"
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include "nvtx3/nvToolsExt.h"
 #endif
+
+#include "nvtx3/nvToolsExt.h"
+#include "nvtx3/nvtx3.hpp"
 
 namespace nvigi
 {
@@ -48,7 +50,7 @@ struct InferenceContext
     common_params params{};
     json modelInfo;
 
-    common_init_result llama_init;
+    common_init_result_ptr llama_init;
 
 #if GGML_USE_CUBLAS
     // Used to set the relative priority of GPU inference and graphics
@@ -174,9 +176,7 @@ nvigi::Result ggmlDestroyInstance(const nvigi::InferenceInstance* instance)
 
         {
             nvigi::RuntimeContextScope scope(*embedInstance);
-            embedInstance->llama_init.model.reset();
-            embedInstance->llama_init.context.reset();
-            embedInstance->llama_init.lora.clear();
+            embedInstance->llama_init.reset();
         }
 
         delete embedInstance;
@@ -188,6 +188,7 @@ nvigi::Result ggmlDestroyInstance(const nvigi::InferenceInstance* instance)
 
 nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::InferenceInstance** _instance)
 {
+    nvtx3::scoped_range r{ "embed create instance" };
     auto common = findStruct<CommonCreationParameters>(_params);
     auto creationParams = findStruct<EmbedCreationParameters>(_params);
     if (!creationParams || !common) return nvigi::kResultInvalidParameter;
@@ -224,7 +225,7 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
     auto& ctx = (*embed::getContext());
 
     // get any gpt_params as set by the config.json for this model.
-    nvigi::NVIGIParameter* _info;
+    nvigi::NVIGIParameter* _info{};
     nvigi::ggmlGetCapsAndRequirements(&_info, _params);
     EmbedCapabilitiesAndRequirements* capsAndReqs = nvigi::castTo<EmbedCapabilitiesAndRequirements>(_info);
     if (_info != nullptr)
@@ -415,12 +416,12 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
             // warmup implicitly creates a cudastream, which cig seems to need to operate correctly.  Previously warmup was causing problems ,but turning it on now (June 2025) appears fine.
             instanceData->params.warmup = true;         
             instanceData->llama_init = common_init_from_params(instanceData->params);
-            if (!instanceData->llama_init.model)
+            if (!instanceData->llama_init->model())
             {
                 delete instanceData;
                 return kResultInvalidState;
             }
-            else if (get_embed_size(instanceData->llama_init.model.get()) <= 0) {
+            else if (get_embed_size(instanceData->llama_init->model()) <= 0) {
                 NVIGI_LOG_ERROR("Embedding size should be at least 1");
                 return kResultInvalidState;
             }
@@ -428,9 +429,9 @@ nvigi::Result ggmlCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::In
 #if GGML_USE_CUBLAS
             // We ask llama for all the cuda_streams it is going to use and 
             // store them to enable us to change their priorities dynamically
-            size_t stream_count = llama_get_cuda_stream_count(instanceData->llama_init.context.get());
+            size_t stream_count = llama_get_cuda_stream_count(instanceData->llama_init->context());
             instanceData->cuda_streams.resize(stream_count);
-            llama_get_cuda_streams(instanceData->llama_init.context.get(), (void**)instanceData->cuda_streams.data(), stream_count);
+            llama_get_cuda_streams(instanceData->llama_init->context(), (void**)instanceData->cuda_streams.data(), stream_count);
 
 
             if (instanceData->cudaContext.usingCiG && ctx.icig->getVersion() >= 2)
@@ -543,6 +544,14 @@ nvigi::Result ggmlGetCapsAndRequirements(nvigi::NVIGIParameter** _info, const nv
                 params_vec_str.push_back(value.get<std::string>());
             };
 
+            // If the model hasn't been listed in llama_cpp_params (it isn't normally), then go ahead and add the path to it to get
+            // the common_params_parse to shut up about it being a missing required argument.
+            if (std::find( params_vec_str.begin(), params_vec_str.end(), "--model") == params_vec_str.end() )
+            {
+                params_vec_str.push_back(std::string("--model"));
+                params_vec_str.push_back(ctx.modelInfo[guid]["gguf"][0]);
+            }
+
             common_params json_llama_cpp_params;
             std::vector< char* > params_vec_cstr;
             for (auto& str : params_vec_str)
@@ -551,7 +560,7 @@ nvigi::Result ggmlGetCapsAndRequirements(nvigi::NVIGIParameter** _info, const nv
             }
 
             if (!common_params_parse(static_cast<int>(params_vec_str.size()), &(params_vec_cstr[0]), json_llama_cpp_params, LLAMA_EXAMPLE_EMBEDDING)) {
-                return 1;
+                return nvigi::kResultInvalidParameter;
             }
 
             ctx.llamacpp_params.push_back(json_llama_cpp_params);
@@ -584,9 +593,7 @@ nvigi::Result ggmlGetCapsAndRequirements(nvigi::NVIGIParameter** _info, const nv
 
 nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx)
 {
-#if GGML_USE_CUBLAS
-    nvtxRangePushA("ggmlEvaluate");
-#endif
+    nvtx3::scoped_range r{ "ggmlEvaluate" };
 
     auto& ctx = (*embed::getContext());
 
@@ -656,7 +663,7 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx)
 #ifndef NVIGI_EMBED_GFN_NVCF
     // Local inference
     std::vector<float> embedding;
-    nvigi::Result res = nvigi::embed::embed(instance->llama_init.context.get(), instance->llama_init.model.get(), instance->params, embedding);
+    nvigi::Result res = nvigi::embed::embed(instance->llama_init->context(), instance->llama_init->model(), instance->params, embedding);
     if (res != kResultOk)
         return res;
 
@@ -664,9 +671,6 @@ nvigi::Result ggmlEvaluate(nvigi::InferenceExecutionContext* execCtx)
     if (ggmlReturnOutputEmbedding(execCtx, embedding) != nvigi::kInferenceExecutionStateDone)
         res = kResultInvalidState;
 
-#if GGML_USE_CUBLAS
-    nvtxRangePop();
-#endif
     return res;
 #else
     return kResultMissingInterface;
@@ -799,6 +803,7 @@ Result nvigiPluginDeregister()
     // alternatively, next time we upgrade LlamaCPP, we could build CPU WIHTOUT OpenMP, but it will be slower.
 
     // So this seems to be the least of evils - wait for the OpenMP threads to spinwait stop and then proceed with shutdown.
+    nvtx3::scoped_range r{ "Sleep(2000) for OpenMP" };
     std::this_thread::sleep_for(std::chrono::milliseconds(2000));
 
     return kResultOk;

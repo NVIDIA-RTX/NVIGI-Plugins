@@ -25,17 +25,7 @@ function get_define_string(defines)
 end
 
 function commaficate(options)
-	if os.ishost("linux") then
-		local result = "";
-		local sep = "";
-		for option in string.gmatch(options, "-%w+") do
-			result = result..sep..tostring(option);
-			sep = ","
-		end
-		return result;
-	else
-		return options;
-	end
+	return options
 end
 
 function generateDependencies(projects)

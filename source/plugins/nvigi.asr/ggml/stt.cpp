@@ -8,6 +8,7 @@
 #include <whisper.h>
 
 #include "source/core/nvigi.api/nvigi.h"
+#include "source/core/nvigi.api/nvigi_io.h"
 #include "source/core/nvigi.log/log.h"
 #include "source/core/nvigi.exception/exception.h"
 #include "source/core/nvigi.plugin/plugin.h"
@@ -24,6 +25,7 @@
 #include "source/utils/nvigi.ai/ai_data_helpers.h"
 #include "source/utils/nvigi.hwi/cuda/runtime_context_scope.h"
 
+#include "nvtx3/nvtx3.hpp"
 
 using json = nlohmann::json;
 
@@ -38,9 +40,6 @@ using json = nlohmann::json;
 #include "source/core/nvigi.api/nvigi_d3d12.h"
 #include "source/plugins/nvigi.hwi/d3d12/nvigi_hwi_d3d12.h"
 #include "source/utils/nvigi.d3d12/d3d12_helpers.h"
-#if PROFILE_D3D
-#include "nvtx3/nvToolsExt.h"
-#endif
 namespace nvigi {
     // this should match the PFun_commandListAction defined in WhisperCPP - redefining as it's at a depth/scope in WhisperCPP not exposed to IGI
     using PFun_commandListAction = void(ID3D12CommandList* pCommandList, int action);
@@ -65,6 +64,7 @@ struct ggml_d3d12_ctx
     uint32_t constantBufferSize = 1024 * 256;
     uint32_t coreCount = 0;
     uint32_t architecture = 0;
+    bool allowAutoTuning = false; // Allow server to choose optimal settings for this GPU
 };
 extern void ggml_d3d12_set_params(const ggml_d3d12_ctx& ctx);
 #elif defined GGML_USE_VULKAN
@@ -146,6 +146,8 @@ struct InferenceContext
     std::vector<float> pcmf32_old;
     std::vector<float> pcmf32;
     std::vector<float> pcmf32_new;
+
+    json modelInfo; // model card for this instance
 
     std::mutex mtx;
     std::future<Result> job;
@@ -302,12 +304,15 @@ nvigi::Result whisperDestroyInstance(const nvigi::InferenceInstance* instance)
 
 nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi::InferenceInstance** _instance)
 {
+    nvtx3::scoped_range r{ "whisperCreateInstance" };
     auto common = findStruct<CommonCreationParameters>(_params);
     auto creationParams = findStruct<ASRWhisperCreationParameters>(_params);
+    auto ioCallbacks = findStruct<FileIOCallbacks>(_params);
+
     if (!creationParams || !common) return nvigi::kResultInvalidParameter;
 
     auto& params = *creationParams;
-    if (!_instance || !common->utf8PathToModels || !common->modelGUID) return nvigi::kResultInvalidParameter;
+    if (!_instance || ((!common->utf8PathToModels || !common->modelGUID) && !ioCallbacks)) return nvigi::kResultInvalidParameter;
 
 #ifdef GGML_USE_CUBLAS
     auto cudaParams = findStruct<CudaParameters>(_params);
@@ -331,21 +336,29 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
 
     std::string pathToModel{};
 
-    if (ctx.modelInfo.empty())
+    auto instanceData = new nvigi::asr::InferenceContext(_params);
+    if (!instanceData->cudaContext.constructorSucceeded)
     {
-        if (!ai::findModels(common, { "gguf" }, ctx.modelInfo))
-        {
-            return kResultInvalidParameter;
-        }
+        delete instanceData;
+        return kResultInvalidState;
+    }
+
+    // NOTE: We have instance model card and also shared model info card(s) in our ASRContext, don't confuse them
+    instanceData->modelInfo.clear();
+    if (!ai::findModels(common, { "gguf" }, instanceData->modelInfo, ioCallbacks))
+    {
+        return kResultInvalidParameter;
     }
 
     std::vector<std::string> files;
     try
     {
-        files = ctx.modelInfo[common->modelGUID]["gguf"];
+        // Extract our model card and store it in our instance data
+        instanceData->modelInfo = instanceData->modelInfo[ioCallbacks ? ai::kSyntheticKey : common->modelGUID];
+        files = instanceData->modelInfo["gguf"];
 
 #if defined(GGML_USE_CUBLAS) || defined(GGML_USE_VULKAN) || defined(GGML_USE_D3D12)
-        size_t neededVRAM = ctx.modelInfo[common->modelGUID]["vram"];
+        size_t neededVRAM = instanceData->modelInfo["vram"];
         if (common->vramBudgetMB < neededVRAM)
         {
             NVIGI_LOG_WARN("Provided VRAM %uMB is insufficient, required VRAM is %uMB", common->vramBudgetMB, neededVRAM);
@@ -365,8 +378,7 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
         return kResultInvalidParameter;
     }
 
-    auto instanceData = new nvigi::asr::InferenceContext(_params);
-    if (!instanceData->cudaContext.constructorSucceeded) return kResultInvalidState;
+    
 
 #if defined(GGML_USE_CUBLAS)
     if (common->numThreads > 1)
@@ -440,51 +452,54 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
             {
                 return res;
             }
+            PFun_commandListAction* CLresetCallback = nullptr;
             if (adapter->vendor == VendorId::eNVDA)
             {
                 if (!ctx.iscg && !framework::getInterface(plugin::getContext()->framework, plugin::hwi::d3d12::kId, &ctx.iscg))
                 {
-                    NVIGI_LOG_ERROR("Missing interface from 'nvigi.plugin.hwi.d3d12'");
-                    return kResultInvalidState;
+                    NVIGI_LOG_WARN("Missing interface from 'nvigi.plugin.hwi.d3d12', scheduling mode will not be applied");
                 }
 
-                if (NVIGI_FAILED(res, d3d12::applyNVDASpecificSettings(d3d12Params, ctx.iscg)))
+                if (ctx.iscg)
                 {
-                    return res;
-                }
-            }
-
-            auto applySchedulingModeCallback = [](ID3D12CommandList* pCommandList, int action)
-                {
-                    // Don't check iscg and version every call, because we do it once when callback is registered
-                    IHWID3D12* iscg = asr::getContext()->iscg;
-                    ID3D12GraphicsCommandList* pGraphicsCommandList = nullptr;
-                    if (SUCCEEDED(pCommandList->QueryInterface<ID3D12GraphicsCommandList>(&pGraphicsCommandList)))
+                    if (NVIGI_FAILED(res, d3d12::applyNVDASpecificSettings(d3d12Params, ctx.iscg)))
                     {
-                        iscg->d3d12ApplyGlobalGpuInferenceSchedulingModeToCommandList(pGraphicsCommandList);
+                        return res;
                     }
-                };
 
-            // Do iscg and version checks now to avoid doing them inside every callback       
-            PFun_commandListAction* CLresetCallback = nullptr;
-            IHWID3D12* iscg = asr::getContext()->iscg;
-            if (iscg)
-            {
-                if (iscg->getVersion() >= 4)
-                {
-                    CLresetCallback = applySchedulingModeCallback;
+                    auto applySchedulingModeCallback = [](ID3D12CommandList* pCommandList, int action)
+                        {
+                            // Don't check iscg and version every call, because we do it once when callback is registered
+                            constexpr int kGgmlCommandListActionDispatchBegin = 2;
+                            if (action != kGgmlCommandListActionDispatchBegin)
+                                return;
+                            IHWID3D12* iscg = asr::getContext()->iscg;
+                            ID3D12GraphicsCommandList* pGraphicsCommandList = nullptr;
+                            if (SUCCEEDED(pCommandList->QueryInterface<ID3D12GraphicsCommandList>(&pGraphicsCommandList)))
+                            {
+                                iscg->d3d12ApplyGlobalGpuInferenceSchedulingModeToCommandList(pGraphicsCommandList);
+                                pGraphicsCommandList->Release();
+                            }
+                        };
+
+                    // Do iscg and version checks now to avoid doing them inside every callback       
+                    if (ctx.iscg->getVersion() >= 4)
+                    {
+                        CLresetCallback = applySchedulingModeCallback;
+                    }
+                    else
+                    {
+                        NVIGI_LOG_WARN_ONCE("We need version 4 of hwi.d3d12 in order to set D3D12 compute scheduling mode, and version available is %d. Performance may be suboptimal.\n", ctx.iscg->getVersion());
+                    }
                 }
                 else
                 {
-                    NVIGI_LOG_WARN_ONCE("We need version 4 of hwi.d3d12 in order to set D3D12 compute scheduling mode, and version available is %d. Performance may be suboptimal.\n", iscg->getVersion());
+                    NVIGI_LOG_WARN_ONCE("hwi.d3d12 was not loaded, so couldn't set D3D12 compute scheduling mode. Performance may be suboptimal.\n");
                 }
-            }
-            else
-            {
-                NVIGI_LOG_WARN_ONCE("hwi.d3d12 was not loaded, so couldn't set D3D12 compute scheduling mode. Performance may be suboptimal.\n");
             }
 
             bool allowReBAR = d3d12Params->getVersion() < 3 || !(d3d12Params->flags & nvigi::D3D12ParametersFlags::eDisableReBAR);
+            bool allowAutoTuning = d3d12Params->getVersion() >= 3 && (d3d12Params->flags & nvigi::D3D12ParametersFlags::eEnableComputeAutoTuning);
             ggml_d3d12_ctx d3d12GGMLParams = {
                 d3d12Params->device,
                 d3d12Params->queue,
@@ -500,7 +515,8 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
                 32 * 1024, // maxDescriptorSets
                 256 * 1024, // constantBufferSize
                 adapter->coreCount,
-                adapter->architecture
+                adapter->architecture,
+                allowAutoTuning
             };
             ggml_d3d12_set_params(d3d12GGMLParams);
 
@@ -555,7 +571,46 @@ nvigi::Result whisperCreateInstance(const nvigi::NVIGIParameter* _params, nvigi:
 #endif
             try
             {
-                instanceData->model = whisper_init_from_file_with_params(pathToModel.c_str(), cparams);
+                if (ioCallbacks)
+                {
+                    auto handle = ioCallbacks->open(ioCallbacks->userData, pathToModel.c_str(), "rb");
+                    if (!handle)
+                    {
+                        throw std::exception(extra::format("Failed to open model file {}", pathToModel.c_str()).c_str());
+                    }
+                    auto size = ioCallbacks->size(ioCallbacks->userData, handle);
+                    uint8_t* mappedData = nullptr;
+                    if (ioCallbacks->map)
+                    {
+                        mappedData = ioCallbacks->map(ioCallbacks->userData, handle, 0, size, MapAccess::eReadOnly);
+                        if (mappedData)
+                        {
+                            instanceData->model = whisper_init_from_buffer_with_params((void*)mappedData, size, cparams);
+                            ioCallbacks->unmap(ioCallbacks->userData, handle, mappedData);
+                        }
+                        else
+                        {
+                            throw std::exception(extra::format("Failed to map model file {} - error {}", pathToModel.c_str(), nvigi::resultToExplanation(ioCallbacks->getLastError(ioCallbacks->userData, handle))).c_str());
+                        }
+                    }
+
+                    if (!mappedData)
+                    {
+                        std::vector<uint8_t> modelData(size);
+                        auto read = ioCallbacks->read(ioCallbacks->userData, handle, modelData.data(), size);
+                        if (read != size)
+                        {
+                            ioCallbacks->close(ioCallbacks->userData, handle);
+                            throw std::exception(extra::format("Failed to read model file {}", pathToModel.c_str()).c_str());
+                        }
+                        instanceData->model = whisper_init_from_buffer_with_params(modelData.data(), modelData.size(), cparams);
+                    }
+                    ioCallbacks->close(ioCallbacks->userData, handle);
+                }
+                else
+                {
+                    instanceData->model = whisper_init_from_file_with_params(pathToModel.c_str(), cparams);
+                }
             }
             catch (std::exception& e)
             {
@@ -638,9 +693,17 @@ nvigi::Result whisperGetCapsAndRequirements(nvigi::NVIGIParameter** _info, const
     *_info = s_caps;
 
     auto& ctx = (*asr::getContext());
-    if (!ai::findModels(common, { "gguf" }, ctx.modelInfo))
+    // Nothing to do if path to models is not provided, user planning to use custom model loading
+    if (common->utf8PathToModels)
     {
-        return kResultInvalidParameter;
+        if (!ai::findModels(common, { "gguf" }, ctx.modelInfo))
+        {
+            return kResultInvalidParameter;
+        }
+    }
+    else
+    {
+        NVIGI_LOG_VERBOSE("Path to models not provided, assuming custom model loading will be used");
     }
 
     // Supported languages, must be null terminated since we don't provide a size
@@ -662,10 +725,6 @@ nvigi::Result whisperGetCapsAndRequirements(nvigi::NVIGIParameter** _info, const
 
 nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool async)
 {
-#if GGML_USE_CUBLAS || (defined(GGML_USE_D3D12) && PROFILE_D3D)
-    nvtxRangePushA("whisperEvaluate");
-#endif
-
     auto& ctx = (*asr::getContext());
 
     // Validate all inputs first
@@ -833,6 +892,7 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
     
     auto runInference = [execCtx, triggerCallback, async, instance, strategy]()->nvigi::Result
     {
+        nvtx3::scoped_range r{ "runInference" };
         auto& params = instance->params;
 
         // IMPORTANT: Read streamType fresh each iteration to pick up changes made by new chunks
@@ -1219,10 +1279,6 @@ nvigi::Result whisperEvaluate(nvigi::InferenceExecutionContext* execCtx, bool as
         result = runInference();
     }
 
-#if GGML_USE_CUBLAS || (defined(GGML_USE_D3D12) && PROFILE_D3D)
-    nvtxRangePop();
-#endif
-
     return result;
 }
 
@@ -1489,6 +1545,7 @@ Result nvigiPluginDeregister()
     // alternatively, next time we upgrade WhisperCPP, we could build CPU WIHTOUT OpenMP, but it will be slower.
 
     // So this seems to be the least of evils - wait for the OpenMP threads to spinwait stop and then proceed with shutdown.
+    nvtx3::scoped_range r{ "Sleep(2000) for OpenMP" };
     std::this_thread::sleep_for(std::chrono::milliseconds(2000));
 
     return kResultOk;

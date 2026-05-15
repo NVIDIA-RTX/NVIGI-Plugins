@@ -6,8 +6,6 @@
 
 #ifdef NVIGI_WINDOWS
 #include <conio.h>
-#else
-#include <linux/limits.h>
 #endif
 
 #include <cassert>
@@ -39,26 +37,6 @@ NVIGIAppCtx nvigiCtx;
 
 std::string system_prompt;
 
-#if NVIGI_LINUX
-#include <unistd.h>
-#include <dlfcn.h>
-using HMODULE = void*;
-#define GetProcAddress dlsym
-#define FreeLibrary dlclose
-#define LoadLibraryA(lib) dlopen(lib, RTLD_LAZY)
-#define LoadLibraryW(lib) dlopen(nvigi::extra::toStr(lib).c_str(), RTLD_LAZY)
-
-#define sscanf_s sscanf
-#define strcpy_s(a,b,c) strcpy(a,c)
-#define strcat_s(a,b,c) strcat(a,c)
-#define memcpy_s(a,b,c,d) memcpy(a,c,d)
-typedef struct __LUID
-{
-    unsigned long LowPart;
-    long HighPart;
-}   LUID;
-#endif
-
 #define DECLARE_NVIGI_CORE_FUN(F) PFun_##F* ptr_##F
 #define GET_NVIGI_CORE_FUN(lib, F) ptr_##F = (PFun_##F*)GetProcAddress(lib, #F)
 DECLARE_NVIGI_CORE_FUN(nvigiInit);
@@ -75,13 +53,7 @@ const uint32_t vram = 1024 * 12;    // maximum vram available in GB
 
 inline std::string getExecutablePath()
 {
-#ifdef NVIGI_LINUX
-    char exePath[PATH_MAX] = {};
-    readlink("/proc/self/exe", exePath, sizeof(exePath));
-    std::string searchPathW = exePath;
-    searchPathW.erase(searchPathW.rfind('/'));
-    return searchPathW + "/";
-#else
+#ifdef NVIGI_WINDOWS
     CHAR pathAbsW[MAX_PATH] = {};
     GetModuleFileNameA(GetModuleHandleA(NULL), pathAbsW, ARRAYSIZE(pathAbsW));
     std::string searchPathW = pathAbsW;

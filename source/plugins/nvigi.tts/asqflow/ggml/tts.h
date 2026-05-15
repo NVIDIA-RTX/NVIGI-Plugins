@@ -11,7 +11,7 @@
 #endif
 
 #include "source/core/nvigi.log/log.h"
-#include "external/asqflow.cpp/include/asqflow.h"
+#include "asqflow.h"
 #include <mutex>
 #include <queue>
 #include <string>
@@ -234,18 +234,19 @@ namespace nvigi
             int totalChunks;
             int processedChunks;
             bool errorOccurred;
-            
+            bool cancelled;
+
             ChunkCallbackData(std::vector<int16_t>* audio, nvigi::InferenceExecutionContext* ctx, 
                             std::function<nvigi::InferenceExecutionState(const std::vector<int16_t>&, const std::string&, nvigi::InferenceExecutionState)>* cb)
-                : outputAudio(audio), execCtx(ctx), callback(cb), totalChunks(0), processedChunks(0), errorOccurred(false) {}
+                : outputAudio(audio), execCtx(ctx), callback(cb), totalChunks(0), processedChunks(0), errorOccurred(false), cancelled(false) {}
         };
 
         // Static callback function for chunk processing
-        static void chunk_processing_callback(int chunk_index, int total_chunks, const char* chunk_text, 
+        static void chunk_processing_callback(struct asqflow_pipeline_state* pipeline_state, int chunk_index, int total_chunks, const char* chunk_text, 
                                             const float* audio_data, size_t audio_size, void* user_data)
         {
             ChunkCallbackData* callbackData = static_cast<ChunkCallbackData*>(user_data);
-            if (!callbackData || callbackData->errorOccurred) return;
+            if (!callbackData || callbackData->errorOccurred || callbackData->cancelled || !pipeline_state) return;
 
             try 
             {
@@ -285,6 +286,13 @@ namespace nvigi
                     if (result == nvigi::kInferenceExecutionStateInvalid)
                     {
                         callbackData->errorOccurred = true;
+                        return;
+                    }
+                    else if (result == nvigi::kInferenceExecutionStateCancel)
+                    {
+                        callbackData->cancelled = true;
+                        asqflow_pipeline_cancel(pipeline_state);
+                        NVIGI_LOG_INFO("Chunk processing cancelled by callback request");
                         return;
                     }
                 }
@@ -403,7 +411,13 @@ namespace nvigi
                         NVIGI_LOG_ERROR("Pipeline inference with chunking failed");
                         return kResultInvalidState;
                     }
-                    
+
+                    if (callbackData.cancelled)
+                    {
+                        NVIGI_LOG_INFO("Pipeline inference cancelled");
+                        return kResultCanceled;
+                    }
+
                     NVIGI_LOG_INFO("Pipeline chunked inference completed: %d chunks processed, %zu total audio samples", 
                                  callbackData.processedChunks, outputAudio.size());
                 }

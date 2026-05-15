@@ -7,6 +7,8 @@ The focus of this guide is on using In-Game Inferencing to integrate an embeddin
 
 > **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the [rag sample](../source/samples/nvigi.rag/rag.cpp)
 
+> **NOTE**: It is best to use one GPU inference API (CUDA, Vulkan or D3D12) per application run/process and not switch between them at runtime for optimal performance and stability.
+
 ## 1.0 INITIALIZE AND SHUTDOWN
 
 Please read the [Programming Guide](../../../nvigi_core/docs/ProgrammingGuide.md) located in the NVIGI Core package to learn more about initializing and shutting down NVIGI SDK. 

@@ -8,6 +8,8 @@ Please read the [Programming Guide for AI](nvigi_core/docs/ProgrammingGuideAI.md
 
 > **IMPORTANT**: This guide might contain pseudo code, for the up to date implementation and source code which can be copy pasted please see the SDK's Basic command line sample [Source Code](../source/samples/nvigi.basic/basic.cpp) and [Docs](Samples.md).  The Basic command-line sample includes use of the GPT plugins to respond to text queries.
 
+> **NOTE**: It is best to use one GPU inference API (CUDA, Vulkan or D3D12) per application run/process and not switch between them at runtime for optimal performance and stability.
+
 > **NOTE** The NVIGI code currently uses the now-outdated term "General Purpose Transformer" for Generative Pre-Trained Transformers in its headers/classes/types.  This will be rectified in a coming release.
 
 > **IMPORTANT NOTE: D3D12 and Vulkan backends are experimental and might not behave or perform as expected.**
@@ -209,6 +211,21 @@ Next we need to provide information about D3D12 properties if our application is
     }
 ```
 
+### 3.2.1 D3D12 AUTOTUNING
+
+The GPT D3D12 backend supports optional compute autotuning through `nvigi::D3D12Parameters::flags`.
+
+Autotuning is disabled by default. If enabled, the backend may spend additional time tuning kernels for the current GPU before reaching steady-state performance.
+
+```cpp
+    // Optional: enable D3D12 compute autotuning
+    d3d12Params.flags |= nvigi::D3D12ParametersFlags::eEnableComputeAutoTuning;
+```
+
+> **NOTE:** This autotuning control currently applies only to the GPT D3D12 backend.
+
+> **NOTE:** Disabling autotuning can reduce first-use latency, but it falls back to heuristic kernel selection and can reduce steady-state performance.
+
 > IMPORTANT: Do NOT chain the same parameters to the multiple parameter chains, the recommended approach is to make a copy per chain. For example, creating an ASR and GPT instance with shared d3d12Params can result in re-chaining the input parameters the wrong way which then results in failed instance creation.
 
 ```cpp
@@ -269,7 +286,6 @@ nvigi::d3d12::D3D12Config d3d12_config = {
     .create_committed_resource_callback = nvigi::d3d12::default_create_committed_resource,
     .destroy_resource_callback = nvigi::d3d12::default_destroy_resource
 };
-
 // Or setup Vulkan (if using Vulkan backend)
 auto vk_objects = nvigi::vulkan::VulkanHelper::create_best_compute_device();
 nvigi::vulkan::VulkanConfig vk_config = {
@@ -313,12 +329,234 @@ auto instance = Instance::create(
 // RAII ensures proper cleanup when instance goes out of scope
 ```
 
+> **NOTE:** D3D12 compute autotuning is currently configured through the low-level `nvigi::D3D12Parameters::flags` API shown in section 3.2.1.
+
 The wrapper automatically:
 - Loads the correct plugin based on backend
 - Chains all creation parameters correctly
 - Manages interface lifetimes
 - Provides clear error messages via `std::expected`
 - Cleans up resources when destroyed
+
+### 3.4 CUSTOM MODEL LOADING WITH EMBEDDED JSON AND FILEIO CALLBACKS
+
+In addition to the traditional model loading approach (using `modelGUID` and `utf8PathToModels` to scan directories), NVIGI supports a custom loading mechanism using **embedded model card JSON** with **FileIOCallbacks**. This approach is useful when:
+
+- You want to embed model configuration directly in your application
+- Models are loaded from custom locations (memory, archives, encrypted storage, network, etc.)
+- You need more control over file I/O operations
+- You want to avoid directory scanning and specify exact file paths
+
+#### Key Differences from Traditional Loading
+
+**Traditional Approach:**
+- Requires `common.modelGUID` (e.g., `"{8E31808B-C182-4016-9ED8-64804FF5B40D}"`)
+- Requires `common.utf8PathToModels` (path to model repository)
+- SDK scans directories to find model JSON files
+- SDK loads GGUF files from discovered locations
+
+**Custom Embedded JSON Approach:**
+- `common.modelGUID` is **empty** or **NULL**
+- `common.utf8PathToModels` is **empty** or **NULL**
+- `common.modelCardJSON` contains **embedded JSON string**
+- JSON includes `"local_files"` array with full paths to GGUF models
+- `FileIOCallbacks` are used to load files (can use default or custom implementations)
+
+#### Embedded JSON Format
+
+The embedded JSON should follow this structure:
+
+```json
+{
+  "name": "minitron 4b",
+  "guid": "{8E31808B-C182-4016-9ED8-64804FF5B40D}",
+  "vram": 4096,
+  "n_layers": 32,
+  "local_files": [
+    "/full/path/to/minitron-4b-base-q4_k_m.gguf"
+  ],
+  "chat_template": [
+    "<extra_id_0>System\n",
+    "{{ system }}\n\n",
+    "<extra_id_1>User\n",
+    "{{ user }}\n\n",
+    "<extra_id_1>Assistant\n",
+    "{{ assistant }}"
+  ]
+}
+```
+
+**Important JSON fields:**
+- `guid`: Model identifier (for reference)
+- `vram`: VRAM requirement in MB
+- `n_layers`: Number of model layers
+- **`local_files`**: Array of full paths to GGUF model files to load
+- `chat_template`: (Optional) Chat formatting template
+- Other fields from standard model JSON can be included
+
+#### C API Example
+
+```cpp
+// Embedded model card JSON (can be loaded from anywhere)
+const char* embeddedModelJSON = R"({
+  "name": "minitron 4b",
+  "guid": "{8E31808B-C182-4016-9ED8-64804FF5B40D}",
+  "vram": 4096,
+  "n_layers": 32,
+  "local_files": [
+    "D:/models/minitron-4b-base-q4_k_m.gguf"
+  ],
+  "chat_template": [
+    "<extra_id_0>System\n{{ system }}\n\n",
+    "<extra_id_1>User\n{{ user }}\n\n",
+    "<extra_id_1>Assistant\n{{ assistant }}"
+  ]
+})";
+
+nvigi::InferenceInstance* gptInstance;
+{
+    nvigi::CommonCreationParameters common{};
+    nvigi::GPTCreationParameters params{};
+    
+    // IMPORTANT: Leave modelGUID and utf8PathToModels empty when using embedded JSON
+    common.modelGUID = nullptr;              // NULL - using embedded JSON
+    common.utf8PathToModels = nullptr;       // NULL - using embedded JSON
+    common.modelCardJSON = embeddedModelJSON; // Set embedded JSON
+    common.numThreads = 4;
+    common.vramBudgetMB = 8192;
+    
+    if(NVIGI_FAILED(params.chain(common)))
+    {
+        // Handle error
+    }
+    
+    // Setup FileIOCallbacks for custom file loading
+    // You can provide custom callbacks or use default file operations
+    nvigi::FileIOCallbacks ioCallbacks{};
+    ioCallbacks.userData = nullptr;
+    ioCallbacks.open = myCustomOpen;    // Your custom open function
+    ioCallbacks.close = myCustomClose;  // Your custom close function
+    ioCallbacks.size = myCustomSize;    // Your custom size function
+    ioCallbacks.tell = myCustomTell;    // Your custom tell function
+    ioCallbacks.seek = myCustomSeek;    // Your custom seek function
+    ioCallbacks.read = myCustomRead;    // Your custom read function
+    // ... other callbacks
+    
+    if(NVIGI_FAILED(params.chain(ioCallbacks)))
+    {
+        // Handle error
+    }
+    
+    // Chain D3D12 or Vulkan parameters as usual
+    nvigi::D3D12Parameters d3d12Params{};
+    // ... setup d3d12Params ...
+    if(NVIGI_FAILED(params.chain(d3d12Params)))
+    {
+        // Handle error
+    }
+    
+    if(NVIGI_FAILED(res, igpt->createInstance(params, &gptInstance)))
+    {
+        LOG("Failed to create instance with embedded JSON");
+    }
+}
+```
+
+#### Modern C++ Wrapper Example
+
+The C++ wrapper simplifies this further:
+
+```cpp
+#include "gpt.hpp"
+#include "io_helpers.hpp"
+
+using namespace nvigi::gpt;
+
+// Embedded model card JSON
+constexpr const char* kEmbeddedModelJSON = R"({
+  "name": "minitron 4b",
+  "guid": "{8E31808B-C182-4016-9ED8-64804FF5B40D}",
+  "vram": 4096,
+  "n_layers": 32,
+  "local_files": [
+    "D:/models/minitron-4b-base-q4_k_m.gguf"
+  ],
+  "chat_template": [
+    "<extra_id_0>System\n{{ system }}\n\n",
+    "<extra_id_1>User\n{{ user }}\n\n",
+    "<extra_id_1>Assistant\n{{ assistant }}"
+  ]
+})";
+
+// Create instance with embedded JSON
+auto instance = Instance::create(
+    ModelConfig{
+        .backend = "cuda",
+        .guid = "",                        // Empty - using embedded JSON
+        .model_path = "",                  // Empty - using embedded JSON
+        .model_card_json = kEmbeddedModelJSON,  // Set embedded JSON
+        .context_size = 4096,
+        .num_threads = 4,
+        .vram_budget_mb = 8192,
+        .flash_attention = true,
+        .cache_type = "fp16"
+    },
+    d3d12_config,
+    vk_config,
+    {},  // cloud config
+    nvigi::io::create_file_wrapper_io(),  // Use default file I/O
+    core.loadInterface(),
+    core.unloadInterface()
+).value();
+```
+
+**Using Custom FileIOCallbacks:**
+
+```cpp
+// Create custom IO config for loading from memory, network, etc.
+nvigi::io::IOConfig io_config;
+io_config.enable_custom_io = true;
+io_config.open = [](void* ctx, const char* path, const char* mode) -> void* {
+    // Your custom open implementation
+    return myMemoryBufferOpen(path);
+};
+io_config.read = [](void* ctx, void* handle, void* buffer, size_t size) -> size_t {
+    // Your custom read implementation
+    return myMemoryBufferRead(handle, buffer, size);
+};
+// ... implement other required callbacks ...
+
+auto instance = Instance::create(
+    ModelConfig{
+        .backend = "cuda",
+        .model_card_json = kEmbeddedModelJSON,
+        // ... other config ...
+    },
+    d3d12_config,
+    vk_config,
+    {},
+    io_config,  // Use custom IO
+    core.loadInterface(),
+    core.unloadInterface()
+).value();
+```
+
+#### Important Notes
+
+1. **Either/Or, Not Both**: Use **either** (`modelGUID` + `utf8PathToModels`) **OR** `modelCardJSON`, never both
+2. **FileIOCallbacks Required**: When using `modelCardJSON`, FileIOCallbacks must be provided (use default or custom)
+3. **Full Paths Required**: The `"local_files"` array must contain full absolute paths to GGUF files
+4. **JSON Validity**: The embedded JSON must be valid and contain all required fields
+5. **Multiple Files**: Some models require multiple GGUF files - include all in `"local_files"` array
+6. **Same Backend Support**: All backends (CUDA, D3D12, Vulkan, CPU) support this approach
+
+#### Benefits
+
+- **Portable**: Model configuration travels with your application
+- **Flexible**: Load models from any source (memory, network, archives, etc.)
+- **No Directory Scanning**: Direct file loading is faster
+- **Custom I/O**: Full control over file operations for encryption, compression, etc.
+- **Embedded Configs**: No external JSON files required
 
 ## 4.0 SETUP CALLBACK TO RECEIVE INFERRED DATA
 
@@ -502,6 +740,40 @@ InferenceDataTextSTLHelper jsonSlot(restJSONBodyAsString);
 std::vector<nvigi::InferenceDataSlot> slots = { {nvigi::kGPTDataSlotJSON, jsonSlot} };
 nvigi::InferenceDataSlotArray inputs = { slots.size(), slots.data() }; // Input slots
 ```
+
+#### 5.3.2 CUSTOM SERVER PARAMETERS VIA JSON INPUT SLOT (LOCAL BACKENDS)
+
+For local inference backends (CUDA, D3D12, Vulkan), the `kGPTDataSlotJSON` input slot can be used **alongside** the standard `system/user/assistant` input slots to pass additional generation parameters directly to the embedded server. This is useful for server-specific parameters not exposed through `GPTRuntimeParameters` or `GPTSamplerParameters`.
+
+The JSON must be a valid JSON object. Its fields are merged into the generation request, with user-provided values overriding any auto-generated values from the runtime/sampler parameter structs.
+
+```cpp
+// Standard input slots
+InferenceDataTextSTLHelper systemSlot("You are a helpful assistant.");
+InferenceDataTextSTLHelper userSlot("Tell me about AI.");
+
+// Custom JSON for additional server parameters
+json customParams = {
+    {"temperature", 0.9},            // Override temperature set in GPTRuntimeParameters
+    {"json_schema", myJsonSchema},   // Constrain output to a JSON schema (server feature)
+    {"stop", {"User:", "\n\n"}},     // Multiple stop sequences  
+    {"cache_prompt", true}           // Server-specific caching hint
+};
+std::string customJsonStr = customParams.dump();
+InferenceDataTextSTLHelper jsonSlot(customJsonStr);
+
+// Combine all input slots - system, user, AND custom JSON
+std::vector<nvigi::InferenceDataSlot> slots = {
+    {nvigi::kGPTDataSlotSystem, systemSlot},
+    {nvigi::kGPTDataSlotUser, userSlot},
+    {nvigi::kGPTDataSlotJSON, jsonSlot}
+};
+nvigi::InferenceDataSlotArray inputs = { slots.size(), slots.data() };
+```
+
+> **NOTE:** The JSON slot is optional. When omitted, the plugin uses the parameters from `GPTRuntimeParameters` and `GPTSamplerParameters` as usual. The JSON slot values take precedence over struct values when both are provided for the same parameter.
+
+> **NOTE:** The JSON parameters follow the OpenAI/llama.cpp server API format. Refer to the OpenAI/llama.cpp server documentation for the full list of supported parameters.
 
 ### 5.4 OUTPUTS
 

@@ -3,9 +3,14 @@ if os.istarget("windows") then
 group "samples"
 
 project "nvigi.fcall"
-	kind "ConsoleApp"
-	targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
-	objdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.buildcfg}_%{cfg.platform}")
+	if premakeX64Targets() then
+		filter { "platforms:x64" }
+			kind "ConsoleApp"
+		filter {}
+	end
+
+	targetdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.platform}/%{cfg.buildcfg}")
+	objdir (ROOT .. "_artifacts/%{prj.name}/%{cfg.platform}/%{cfg.buildcfg}")
 	
 	dependson {"gitVersion"}
 
@@ -40,7 +45,6 @@ project "nvigi.fcall"
 		-- Begin for libcurl
 		links { "libcurl.lib",  "ws2_32.lib", "wldap32.lib","advapi32.lib", "crypt32.lib", "normaliz.lib"}
 		-- End for libcurl
-	filter {"system:linux"}
 	filter {}
 
 group ""

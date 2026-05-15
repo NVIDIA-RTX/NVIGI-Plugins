@@ -41,7 +41,10 @@
 #include <climits>
 #else
 #define PATH_MAX MAX_PATH
+#include <timeapi.h>
 #endif // _WIN32
+
+#include "nvtx3/nvtx3.hpp"
 
 extern "C" __declspec(dllexport) UINT        D3D12SDKVersion = 615;
 extern "C" __declspec(dllexport) const char* D3D12SDKPath = ".\\D3D12\\";
@@ -259,8 +262,43 @@ NVIGIContext& NVIGIContext::Get() {
     return instance;
 }
 
+void NVIGIContext::FramerateLimit()
+{
+    if (!m_framerateLimiting)
+        return;
+
+    nvtx3::scoped_range r{ "FramerateLimit" };
+
+#ifdef _WIN32
+    timeBeginPeriod(1);
+#endif
+    if (m_framerateTimer.running)
+    {
+        m_framerateTimer.Stop();
+        const double leftoverMs = 1000.0 / (double)m_targetFramerate - m_framerateTimer.GetElapsedMiliseconds();
+        if (leftoverMs >= 1.0)
+        {
+            std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(leftoverMs));
+        }
+        m_framerateTimer.Start();
+    }
+    else
+    {
+        m_framerateTimer.Start();
+    }
+#ifdef _WIN32
+    timeEndPeriod(1);
+#endif
+}
+
 void NVIGIContext::PresentEnd(donut::app::DeviceManager& manager, uint32_t i)
 {
+    if (Get().m_hwiCommon)
+        Get().m_hwiCommon->SetGpuInferenceSchedulingMode(Get().m_schedulingMode);
+
+    Get().PollASR();
+    Get().PollGPT();
+    Get().PollTTS();
     Get().FramerateLimit();
 }
 
@@ -314,7 +352,7 @@ bool NVIGIContext::CheckPluginCompat(nvigi::PluginID id, const std::string& name
     }
 }
 
-bool NVIGIContext::AddGPTPlugin(const std::string& backend)
+bool NVIGIContext::AddGPTPlugin(const std::string& backend, bool available)
 {
     // Convert backend string to plugin ID
     nvigi::PluginID id = nvigi::gpt::backend_to_plugin_id(backend);
@@ -358,7 +396,7 @@ bool NVIGIContext::AddGPTPlugin(const std::string& backend)
             info->m_guid = models->supportedModelGUIDs[i];
             info->m_modelRoot = m_shippedModelsPath;
             info->m_vram = models->modelMemoryBudgetMB[i];
-            info->m_modelStatus = (models->modelFlags[i] & nvigi::kModelFlagRequiresDownload)
+            info->m_modelStatus = !available ? ModelStatus::UNAVAILABLE : (models->modelFlags[i] & nvigi::kModelFlagRequiresDownload)
                 ? ModelStatus::AVAILABLE_MANUAL_DOWNLOAD : ModelStatus::AVAILABLE_LOCALLY;
             m_gpt.m_pluginModelsMap[info->m_guid].push_back(info);
         }
@@ -445,7 +483,7 @@ bool NVIGIContext::AddGPTCloudPlugin()
 }
 
 
-bool NVIGIContext::AddASRPlugin(const std::string& backend)
+bool NVIGIContext::AddASRPlugin(const std::string& backend, bool available)
 {
     // Convert backend string to plugin ID
     nvigi::PluginID id = nvigi::asr::backend_to_plugin_id(backend);
@@ -488,7 +526,7 @@ bool NVIGIContext::AddASRPlugin(const std::string& backend)
             info->m_guid = models.supportedModelGUIDs[i];
             info->m_modelRoot = m_shippedModelsPath;
             info->m_vram = models.modelMemoryBudgetMB[i];
-            info->m_modelStatus = (models.modelFlags[i] & nvigi::kModelFlagRequiresDownload)
+            info->m_modelStatus = !available ? ModelStatus::UNAVAILABLE : (models.modelFlags[i] & nvigi::kModelFlagRequiresDownload)
                 ? ModelStatus::AVAILABLE_MANUAL_DOWNLOAD : ModelStatus::AVAILABLE_LOCALLY;
             m_asr.m_pluginModelsMap[info->m_guid].push_back(info);
         }
@@ -501,7 +539,7 @@ bool NVIGIContext::AddASRPlugin(const std::string& backend)
     return false;
 }
 
-bool NVIGIContext::AddTTSPlugin(const std::string& backend)
+bool NVIGIContext::AddTTSPlugin(const std::string& backend, bool available)
 {
     // Convert backend string to plugin ID
     nvigi::PluginID id = nvigi::tts::backend_to_plugin_id(backend);
@@ -544,7 +582,7 @@ bool NVIGIContext::AddTTSPlugin(const std::string& backend)
             info->m_guid = models.supportedModelGUIDs[i];
             info->m_modelRoot = m_shippedModelsPath;
             info->m_vram = models.modelMemoryBudgetMB[i];
-            info->m_modelStatus = (models.modelFlags[i] & nvigi::kModelFlagRequiresDownload)
+            info->m_modelStatus = !available ? ModelStatus::UNAVAILABLE : (models.modelFlags[i] & nvigi::kModelFlagRequiresDownload)
                 ? ModelStatus::AVAILABLE_MANUAL_DOWNLOAD : ModelStatus::AVAILABLE_LOCALLY;
             m_tts.m_pluginModelsMap[info->m_guid].push_back(info);
         }
@@ -588,6 +626,14 @@ bool NVIGIContext::Initialize_preDeviceManager(nvrhi::GraphicsAPI api, int argc,
         {
             m_useCiG = false;
         }
+        else if (!_stricmp(argv[i], "-useCUDA") || !_stricmp(argv[i], "-cuda"))
+        {
+            m_useCUDAInference = true;
+        }
+        else if(!strcmp(argv[i], "-skipLoad") || !_stricmp(argv[i], "-noLoad"))
+        {
+            m_skipLaunchLoading = true;
+		}
     }
 
     // Get executable path for SDK location
@@ -676,24 +722,43 @@ bool NVIGIContext::Initialize_preDeviceManager(nvrhi::GraphicsAPI api, int argc,
 
     m_gpt.m_vramBudget = 8500;
 
-    // Setup backend choices using simple strings
-    m_gpt.m_choices = {
-        .m_nvda = "cuda",   // NVIDIA CUDA
-        .m_gpu = "d3d12",   // Generic GPU (will be updated based on API)
-        .m_cloud = "cloud", // Cloud
-        .m_cpu = ""         // CPU (not supported for GPT)
-    };
-
-    AddGPTPlugin("cuda");
+    std::string renderAPI = "";
     if (m_api == nvrhi::GraphicsAPI::D3D12)
-    {
-        m_gpt.m_choices.m_gpu = "d3d12";
-        AddGPTPlugin("d3d12");
-    }
+        renderAPI = "d3d12";
     else if (m_api == nvrhi::GraphicsAPI::VULKAN)
+        renderAPI = "vulkan";
+    else
     {
-        m_gpt.m_choices.m_gpu = "vulkan";
-        AddGPTPlugin("vulkan");
+        donut::log::error("No supported renderer selected - must be D3D12 or Vulkan");
+        return false;
+    }
+
+    if (m_useCUDAInference)
+    {
+        // Setup backend choices using simple strings
+        m_gpt.m_choices = {
+            .m_nvda = "cuda",   // NVIDIA CUDA
+            .m_gpu = "",   // Generic GPU (will be updated based on API)
+            .m_cloud = "cloud", // Cloud
+            .m_cpu = ""         // CPU (not supported for GPT)
+        };
+
+        AddGPTPlugin("cuda", true);
+        AddGPTPlugin(renderAPI, false);
+    }
+    else
+    {
+        // Setup backend choices using simple strings
+        m_gpt.m_choices = {
+            .m_nvda = "",
+            .m_gpu = "",   // Generic GPU (will be updated based on API)
+            .m_cloud = "cloud", // Cloud
+            .m_cpu = ""         // CPU (not supported for GPT)
+        };
+
+        m_gpt.m_choices.m_gpu = m_gpt.m_choices.m_nvda = renderAPI;
+        AddGPTPlugin(renderAPI, true);
+        AddGPTPlugin("cuda", false);
     }
     AddGPTCloudPlugin();
 
@@ -721,30 +786,40 @@ bool NVIGIContext::Initialize_preDeviceManager(nvrhi::GraphicsAPI api, int argc,
             if (m_gpt.m_info && m_gpt.m_info->m_guid == preferredModelGUID)
                 break;
         }
+        if (m_skipLaunchLoading)
+            m_gpt.m_info = nullptr;
     }
 
     m_asr.m_vramBudget = 3000;
 
-    // Setup backend choices using simple strings
-    m_asr.m_choices = {
-        .m_nvda = "cuda",   // NVIDIA CUDA
-        .m_gpu = "",        // Generic GPU (will be updated based on API)
-        .m_cloud = "",      // Cloud (not supported for ASR)
-        .m_cpu = "cpu"      // CPU fallback
-    };
+    if (m_useCUDAInference)
+    {
+        // Setup backend choices using simple strings
+        m_asr.m_choices = {
+            .m_nvda = "cuda",   // NVIDIA CUDA
+            .m_gpu = "",        // Generic GPU (will be updated based on API)
+            .m_cloud = "",      // Cloud (not supported for ASR)
+            .m_cpu = "cpu"      // CPU fallback
+        };
 
-    AddASRPlugin("cuda");
-    if (m_api == nvrhi::GraphicsAPI::D3D12)
-    {
-        m_asr.m_choices.m_gpu = "d3d12";
-        AddASRPlugin("d3d12");
+        AddASRPlugin("cuda", true);
+        AddASRPlugin(renderAPI, false);
     }
-    else if (m_api == nvrhi::GraphicsAPI::VULKAN)
+    else
     {
-        m_asr.m_choices.m_gpu = "vulkan";
-        AddASRPlugin("vulkan");
+        // Setup backend choices using simple strings
+        m_asr.m_choices = {
+            .m_nvda = "",
+            .m_gpu = "",        // Generic GPU (will be updated based on API)
+            .m_cloud = "",      // Cloud (not supported for ASR)
+            .m_cpu = "cpu"      // CPU fallback
+        };
+
+        m_asr.m_choices.m_gpu = m_asr.m_choices.m_nvda = renderAPI;
+        AddASRPlugin(renderAPI, true);
+        AddASRPlugin("cuda", false);
     }
-    AddASRPlugin("cpu");
+    AddASRPlugin("cpu", true);
 
     {
         // Select initial plugin m_asr.m_info...  Or we set it to null?
@@ -783,30 +858,39 @@ bool NVIGIContext::Initialize_preDeviceManager(nvrhi::GraphicsAPI api, int argc,
                     break;
             }
         }
+        if (m_skipLaunchLoading)
+            m_asr.m_info = nullptr;
     }
 
     m_tts.m_vramBudget = 8500;
 
-    // Setup backend choices using simple strings
-    m_tts.m_choices = {
-        .m_nvda = "trt",    // TensorRT (NVIDIA)
-        .m_gpu = "",        // Generic GPU (will be updated based on API)
-        .m_cloud = "",      // Cloud (not supported for TTS)
-        .m_cpu = ""         // CPU (not supported for TTS)
-    };
+    if (m_useCUDAInference)
+    {
+        // Setup backend choices using simple strings
+        m_tts.m_choices = {
+			.m_nvda = "cuda",    // CUDA (NVIDIA GPU)
+            .m_gpu = "",        // Generic GPU (will be updated based on API)
+            .m_cloud = "",      // Cloud (not supported for TTS)
+            .m_cpu = ""         // CPU (not supported for TTS)
+        };
 
-    AddTTSPlugin("trt");
-    if (m_api == nvrhi::GraphicsAPI::D3D12)
-    {
-        m_tts.m_choices.m_gpu = "d3d12";
-        AddTTSPlugin("d3d12");
+        AddTTSPlugin("cuda", true);
+        AddTTSPlugin(renderAPI, false);
     }
-    else if (m_api == nvrhi::GraphicsAPI::VULKAN)
+    else
     {
-        m_tts.m_choices.m_gpu = "vulkan";
-        AddTTSPlugin("vulkan");
+        // Setup backend choices using simple strings
+        m_tts.m_choices = {
+            .m_nvda = "",
+            .m_gpu = "",        // Generic GPU (will be updated based on API)
+            .m_cloud = "",      // Cloud (not supported for TTS)
+            .m_cpu = ""         // CPU (not supported for TTS)
+        };
+
+        m_tts.m_choices.m_gpu = m_tts.m_choices.m_nvda = renderAPI;
+        AddTTSPlugin(renderAPI, true);
+        AddTTSPlugin("cuda", false);
     }
-    AddTTSPlugin("cuda");
 
     {
         // Set the TTS to unselected initially, as not everyone will want to use it
@@ -827,9 +911,9 @@ bool NVIGIContext::Initialize_preDeviceManager(nvrhi::GraphicsAPI api, int argc,
             if (m_tts.m_info)
                 break;
         }
+        if (m_skipLaunchLoading)
+            m_tts.m_info = nullptr;
     }
-
-    m_gpt.m_callbackState.store(nvigi::gpt::ExecutionState::Invalid);
 
     messages.push_back({ Message::Type::Answer, "Type a query or record audio to interact!" });
 
@@ -979,9 +1063,21 @@ bool NVIGIContext::Initialize_postDevice()
     GetVRAMStats(currentVRAM, m_maxVRAM);
     m_maxVRAM /= (1024 * 1024);
 
+    if (m_hwiCommon)
+        m_hwiCommon->SetGpuInferenceSchedulingMode(m_schedulingMode);
+
+    // Prime the audio system.
+    m_recordingData = AudioRecorder::StartRecording();
+    std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(50));
+    if (m_recordingData)
+        AudioRecorder::StopRecording(m_recordingData);
+    m_recordingData = nullptr;
+
+
     //! Load A2T script    
     auto loadASR = [this]()->HRESULT
         {
+            nvtx3::scoped_range r{"loadASR"};
             PluginModelInfoPtr gptInfo = m_gpt.m_info;
 
             if (gptInfo)
@@ -1017,7 +1113,7 @@ bool NVIGIContext::Initialize_postDevice()
                 // Create GPT instance using modern wrapper
                 auto result = nvigi::gpt::Instance::create(
                     model_config,
-                    m_d3d12_config,
+                    (gptInfo->m_backend != "cuda" || m_useCiG) ? m_d3d12_config : nvigi::d3d12::D3D12Config(),
                     m_vk_config,
                     cloud_config,
                     {}, // io_config (default file system)
@@ -1037,7 +1133,7 @@ bool NVIGIContext::Initialize_postDevice()
                         .interactive = true,
                         .reverse_prompt = "User: "
                     }));
-                    m_gpt.m_ready.store(true);
+                    ResetGPT();
                 } else {
                     donut::log::error("Unable to create GPT instance/model: %s", result.error().what().c_str());
                     m_gpt.m_ready.store(false);
@@ -1065,11 +1161,22 @@ bool NVIGIContext::Initialize_postDevice()
                     .detect_language = false
                 };
 
+                // Let GGML own its Vulkan device/queues for ASR to avoid sharing renderer queues.
+                nvigi::vulkan::VulkanConfig vk_config{};
+                if (model_config.backend == "vulkan")
+                {
+                    vk_config.physical_device = m_vk_config.physical_device;
+                }
+                else
+                {
+                    vk_config = m_vk_config;
+                }
+
                 // Create ASR instance using modern wrapper
                 auto result = nvigi::asr::Instance::create(
                     model_config,
-                    m_d3d12_config,
-                    m_vk_config,
+                    (asrInfo->m_backend != "cuda" || m_useCiG) ? m_d3d12_config : nvigi::d3d12::D3D12Config(),
+                    vk_config,
                     {}, // io_config (default file system)
                     m_core->loadInterface(),
                     m_core->unloadInterface(),
@@ -1119,7 +1226,7 @@ bool NVIGIContext::Initialize_postDevice()
                 // Create TTS instance using modern wrapper
                 auto result = nvigi::tts::Instance::create(
                     model_config,
-                    m_d3d12_config,
+                    (ttsInfo->m_backend != "cuda" || m_useCiG) ? m_d3d12_config : nvigi::d3d12::D3D12Config(),
                     vk_config,
                     m_core->loadInterface(),
                     m_core->unloadInterface(),
@@ -1209,6 +1316,7 @@ void NVIGIContext::ReloadGPTModel(PluginModelInfoPtr newGptInfo)
 
     auto loadModel = [this, prevGptInfo, newGptInfo]()->void
         {
+            nvtx3::scoped_range r{ "loadModel" };
             // Build ModelConfig
             nvigi::gpt::ModelConfig model_config{
                 .backend = newGptInfo->m_backend,
@@ -1242,7 +1350,7 @@ void NVIGIContext::ReloadGPTModel(PluginModelInfoPtr newGptInfo)
             // Create GPT instance using modern wrapper
             auto result = nvigi::gpt::Instance::create(
                 model_config,
-                m_d3d12_config,
+                (newGptInfo->m_backend != "cuda" || m_useCiG) ? m_d3d12_config : nvigi::d3d12::D3D12Config(),
                 m_vk_config,
                 cloud_config,
                 {}, // io_config (default file system)
@@ -1262,7 +1370,7 @@ void NVIGIContext::ReloadGPTModel(PluginModelInfoPtr newGptInfo)
                     .interactive = true,
                     .reverse_prompt = "User: "
                 }));
-                m_gpt.m_ready.store(true);
+                ResetGPT();
             } else {
                 // Fallback to previous model
                 donut::log::error("Unable to create GPT instance/model: %s. Reverting to previous model", result.error().what().c_str());
@@ -1292,7 +1400,7 @@ void NVIGIContext::ReloadGPTModel(PluginModelInfoPtr newGptInfo)
 
                     auto fallback_result = nvigi::gpt::Instance::create(
                         model_config,
-                        m_d3d12_config,
+                        (prevGptInfo->m_backend != "cuda" || m_useCiG) ? m_d3d12_config : nvigi::d3d12::D3D12Config(),
                         m_vk_config,
                         cloud_config,
                         {},
@@ -1311,7 +1419,7 @@ void NVIGIContext::ReloadGPTModel(PluginModelInfoPtr newGptInfo)
                             .interactive = true,
                             .reverse_prompt = "User: "
                         }));
-                        m_gpt.m_ready.store(true);
+                        ResetGPT();
                     } else {
                         donut::log::error("Unable to create GPT instance/model and cannot revert to previous model");
                         m_gpt.m_ready.store(false);
@@ -1347,6 +1455,7 @@ void NVIGIContext::ReloadASRModel(PluginModelInfoPtr newAsrInfo)
 
     auto loadModel = [this, newAsrInfo]()->void
         {
+            nvtx3::scoped_range r{ "loadModel" };
             cerr_redirect ggmlLog;
 
             // Build ModelConfig
@@ -1362,11 +1471,22 @@ void NVIGIContext::ReloadASRModel(PluginModelInfoPtr newAsrInfo)
                 .detect_language = false
             };
 
+            // Let GGML own its Vulkan device/queues for ASR to avoid sharing renderer queues.
+            nvigi::vulkan::VulkanConfig vk_config{};
+            if (model_config.backend == "vulkan")
+            {
+                vk_config.physical_device = m_vk_config.physical_device;
+            }
+            else
+            {
+                vk_config = m_vk_config;
+            }
+
             // Create ASR instance using modern wrapper
             auto result = nvigi::asr::Instance::create(
                 model_config,
-                m_d3d12_config,
-                m_vk_config,
+                (newAsrInfo->m_backend != "cuda" || m_useCiG) ? m_d3d12_config : nvigi::d3d12::D3D12Config(),
+                vk_config,
                 {},
                 m_core->loadInterface(),
                 m_core->unloadInterface(),
@@ -1406,6 +1526,7 @@ void NVIGIContext::ReloadTTSModel(PluginModelInfoPtr newTtsInfo)
 
     auto loadModel = [this, newTtsInfo]()->void
         {
+            nvtx3::scoped_range r{ "loadModel" };
             // Build ModelConfig
             nvigi::tts::ModelConfig model_config{
                 .backend = newTtsInfo->m_backend,
@@ -1423,7 +1544,7 @@ void NVIGIContext::ReloadTTSModel(PluginModelInfoPtr newTtsInfo)
             // Create TTS instance using modern wrapper
             auto result = nvigi::tts::Instance::create(
                 model_config,
-                m_d3d12_config,
+                (newTtsInfo->m_backend != "cuda" || m_useCiG) ? m_d3d12_config : nvigi::d3d12::D3D12Config(),
                 vk_config, // TODO send this down
                 m_core->loadInterface(),
                 m_core->unloadInterface(),
@@ -1443,6 +1564,11 @@ void NVIGIContext::ReloadTTSModel(PluginModelInfoPtr newTtsInfo)
 
 void NVIGIContext::LaunchASR()
 {
+    m_recording = true;
+
+    m_a2t = "";
+    m_gptInput = "";
+
     m_newInferenceSequence = true;
 
     if (!m_asr.m_ready)
@@ -1459,142 +1585,141 @@ void NVIGIContext::LaunchASR()
         return;
     }
 
-    auto l = [this]()->void
+    // Create a stream for audio processing
+    if (!m_asrStream)
+        m_asrStream.emplace(m_asrInstance->create_stream(
+            nvigi::asr::RuntimeConfig{}
+            .set_sampling(nvigi::asr::SamplingStrategy::Greedy)
+            .set_temperature(0.0f)
+            .set_best_of(2)
+        ));
+
+    m_asr.m_running.store(true);
+
+    m_asrBytesProcessed = 0;
+
+    m_asrPartialText = "";
+}
+
+void NVIGIContext::StopASR()
+{
+    m_recording = false;
+
+    std::vector<uint8_t> audioData;
+    if (m_recordingData)
+        audioData = AudioRecorder::StopRecording(m_recordingData);
+
+    if (audioData.size() > m_asrBytesProcessed)
+    {
+        const bool is_first = !m_asrAsyncOp;
+        m_asrAsyncOp = m_asrStream->send_audio_async(
+            audioData.data() + m_asrBytesProcessed,
+            audioData.size() - m_asrBytesProcessed,
+            is_first,
+            false
+        ).value();
+        m_asrBytesProcessed = audioData.size();
+    }
+
+    uint8_t chunk_data[8] = {};
+    m_asrAsyncOp = m_asrStream->send_audio_async(
+        chunk_data,
+        sizeof(chunk_data),
+        false,
+        true
+    ).value();
+
+    m_recordingData = nullptr;
+}
+
+void NVIGIContext::PollASR()
+{
+    nvtx3::scoped_range r{ "PollASR" };
+    // 1. Poll audio input
+
+    // Get new audio chunk if available
+    std::vector<uint8_t> chunk_data;
+	bool newChunk = false;
+    if (m_recordingData)
+    {
+        // Thread-safe: Read current size and copy chunk data
+        std::lock_guard<std::mutex> lock(m_recordingData->mutex);
+        size_t current_size = m_recordingData->bytesWritten;
+
+        // Audio format: 16000 Hz, 16-bit, mono = 32000 bytes/second
+        const size_t chunk_size = size_t(0.2f * 32000); // 200ms
+
+        // Check if we have new data
+        if (current_size > m_asrBytesProcessed) {
+            nvtx3::scoped_range r{ "PollASR received data" };
+            size_t available = current_size - m_asrBytesProcessed;
+
+            // Only process if we have at least chunk_size of new data
+            if (available >= chunk_size) {
+                // Copy the new chunk while holding the lock
+                chunk_data.resize(chunk_size);
+                memcpy(chunk_data.data(),
+                    m_recordingData->audioBuffer.data() + m_asrBytesProcessed,
+                    chunk_size);
+                m_asrBytesProcessed += chunk_size;
+                newChunk = true;
+            }
+        }
+    }
+    // Audio buffer lock released
+
+	// 2. Pass any new new audio to  ASR stream
+
+    // Send chunk of data to ASR Stream; send "last block" if we are stopping the recording
+    if (newChunk) {
+        nvtx3::scoped_range r{ "PollASR send audio" };
+        bool is_first = !m_asrAsyncOp;
+
+        // Send chunk to ASR (non-blocking, managed internally!)
+        m_asrAsyncOp = m_asrStream->send_audio_async(
+            chunk_data.data(),
+            chunk_data.size(),
+            is_first,
+            false
+        ).value();
+    }
+
+    // 3. Poll stream for results (manages operations internally!)
+    if (m_asrAsyncOp) {
+        if (auto result = m_asrAsyncOp->try_get_results())
         {
-            m_inferThreadRunning = true;
-            
-            if (m_hwiCommon)
-                m_hwiCommon->SetGpuInferenceSchedulingMode(m_schedulingMode);
+            nvtx3::scoped_range r{ "PollASR received result" };
 
-            {
-                // Create a stream for audio processing
-                if (!m_asrStream)
-                    m_asrStream.emplace(m_asrInstance->create_stream(
-                    nvigi::asr::RuntimeConfig{}
-                        .set_sampling(nvigi::asr::SamplingStrategy::Greedy)
-                        .set_temperature(0.0f)
-                        .set_best_of(2)
-                    ));
-
-                m_asr.m_running.store(true);
-                bool first_audio_submitted = false;
-                bool first_result_received = false;
-
-                // Audio format: 16000 Hz, 16-bit, mono = 32000 bytes/second
-                const size_t chunk_size = size_t(0.2f * 32000); // 200ms
-
-                size_t chunk_count = 0;
-                size_t bytes_processed = 0;
-                std::optional< nvigi::asr::Instance::AsyncOperation> async_op;
-                std::string partial_text = "";
-                bool streaming = true;
-                bool is_recording = true;
-                while (streaming) {
-					// Handle the transition from recording to not recording based on the UI button
-                    //  We are STILL streaming after recording is done, as we need to empty the pipeline
-                    bool recording_is_stopping = is_recording && !m_recording;
-                    if (!m_recording)
-                        is_recording = false;
-
-                    // Poll stream for results (manages operations internally!)
-                    if (async_op.has_value()) {
-                        if (auto result = async_op->try_get_results())
-                        {
-                            std::scoped_lock lock(m_mtx);
+            std::scoped_lock lock(m_mtx);
                                
-                            if (messages.size() == 0 || messages.back().type != Message::Type::Question)
-                                messages.push_back({ Message::Type::Question, "" });
+            if (messages.size() == 0 || messages.back().type != Message::Type::Question)
+                messages.push_back({ Message::Type::Question, "" });
 
-                            if (!first_result_received && !result->text.empty() && !result->text.contains("[BLANK_AUDIO]")) {
-                                first_result_received = true;
-                                m_asrTimer.Stop();
-                            }
+            std::string redacted = std::regex_replace(result->text, std::regex("\\[BLANK\\_AUDIO\\]"), "");
+            if (!result->text.empty()) {
+                if (result->state == nvigi::asr::ExecutionState::DataPartial)
+                {
+                    // Partial
+                    m_asrPartialText = redacted;
+                }
 
-                            std::string redacted = std::regex_replace(result->text, std::regex("\\[BLANK\\_AUDIO\\]"), "");
-                            if (!result->text.empty()) {
-                                if (result->state == nvigi::asr::ExecutionState::DataPartial)
-                                {
-                                    // Partial
-                                    partial_text = redacted;
-                                }
-
-                                if (result->state != nvigi::asr::ExecutionState::DataPartial) {
-                                    // Non-partial
-                                    partial_text = "";
-                                    m_a2t.append(redacted);
-                                    m_gptInput.append(redacted);
-                                }
-                            }
-                            messages.back().text = m_gptInput + partial_text;
-
-                            // Look for Done messages only after (or as) we end recording
-                            // // This ignores any spurious "Done" messages at the start of things before
-                            // real data has come in from recording
-                            if (!is_recording && result->state == nvigi::asr::ExecutionState::Done)
-                                streaming = false;
-                        }
-                    }
-
-                    // Get new audio chunk if available
-                    std::vector<uint8_t> chunk_data;
-
-                    {
-                        // Thread-safe: Read current size and copy chunk data
-                        std::lock_guard<std::mutex> lock(m_recordingData->mutex);
-                        size_t current_size = m_recordingData->bytesWritten;
-
-                        // Check if we have new data
-                        if (current_size > bytes_processed) {
-                            size_t available = current_size - bytes_processed;
-
-                            // Only process if we have at least chunk_size of new data
-                            if (available >= chunk_size) {
-                                // Copy the new chunk while holding the lock
-                                chunk_data.resize(chunk_size);
-                                memcpy(chunk_data.data(),
-                                    m_recordingData->audioBuffer.data() + bytes_processed,
-                                    chunk_size);
-                                bytes_processed += chunk_size;
-                            }
-                        }
-                    }
-                    // Audio buffer lock released
-
-                    // Send chunk of data to ASR Stream; send "last block" if we are stopping the recording
-                    if (!chunk_data.empty() && is_recording && !recording_is_stopping) {
-                        bool is_first = (chunk_count == 0);
-
-                        if (!first_audio_submitted) {
-                            first_audio_submitted = true;
-                            m_asrTimer.Start();
-                        }
-
-                        // Send chunk to ASR (non-blocking, managed internally!)
-                        async_op = m_asrStream->send_audio_async(
-                            chunk_data.data(),
-                            chunk_data.size(),
-                            is_first,
-                            false
-                        ).value();
-
-                        chunk_count++;
-                    }
-                    else if (recording_is_stopping)
-                    {
-                        // Send chunk to ASR (non-blocking, managed internally!)
-                        async_op = m_asrStream->send_audio_async(
-                            chunk_data.data(),
-                            chunk_data.size(),
-                            false,
-                            true
-                        ).value();
-                    }
-
-                    // Small sleep to avoid busy-wait
-                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                if (result->state != nvigi::asr::ExecutionState::DataPartial) {
+                    // Non-partial
+                    m_asrPartialText = "";
+                    m_a2t.append(redacted);
+                    m_gptInput.append(redacted);
                 }
             }
+            messages.back().text = m_gptInput + m_asrPartialText;
+        }
 
+        // Look for Done messages only after (or as) we end recording
+        // // This ignores any spurious "Done" messages at the start of things before
+        // real data has come in from recording
+        if (!m_recording && m_asrAsyncOp->is_complete())
+        {
+            nvtx3::scoped_range r{ "PollASR received done" };
+            // At end of stream
             // If GPT is not available, we give output of ASR directly to TTS.
             if (!m_gpt.m_ready && m_tts.m_ready)
             {
@@ -1602,107 +1727,171 @@ void NVIGIContext::LaunchASR()
             }
 
             m_gptInputReady = true;
+            m_asrAsyncOp->reset();
+            m_asrAsyncOp.reset();
             m_asr.m_running.store(false);
-            m_inferThreadRunning = false;
-        };
-    m_inferThread = std::make_unique<std::thread>(l);
+        }
+    }
+}
+
+void NVIGIContext::ResetGPT()
+{
+    if (!m_gptChat) {
+        donut::log::error("GPT Chat interface not initialized");
+        return;
+    }
+
+    // Active GPT - skip
+    if (m_gptAsyncOp)
+        return;
+
+    m_conversationInitialized = false;
+    m_gptAsyncOp = m_gptChat->send_message_polled(
+        { .role = nvigi::gpt::Instance::Chat::Message::Role::System,
+        .content = m_systemPromptGPT
+        }
+    ).value();
 }
 
 void NVIGIContext::LaunchGPT(std::string prompt)
 {
+    nvtx3::scoped_range r{"LaunchGPT"};
+    if (!m_gptChat) {
+        donut::log::error("GPT Chat interface not initialized");
+        return;
+    }
+
     m_newInferenceSequence = true;
 
-    auto l = [this, prompt]()->void
+    {
+        std::scoped_lock lock(m_mtx);
+        messages.push_back({ Message::Type::Answer, "" });
+    }
+
+    m_gpt.m_running.store(true);
+    m_gptFirstTokenTimer.Start();
+    m_nvtxGptFirstTokenRangeId = nvtxRangeStartA("nvigi.3d: GPT time to first token");
+    m_nvtxGptFirstTokenRangeActive = true;
+
+    // Send user message with callback for streaming
+    m_gptAsyncOp = m_gptChat->send_message_polled(
+        { .role = nvigi::gpt::Instance::Chat::Message::Role::User,
+        .content = prompt
+        }
+    ).value();
+}
+
+void NVIGIContext::PollGPT()
+{    
+    if (!m_gptChat) {
+        return;
+    }
+
+    // Initialize conversation with system prompt if not already done
+    if (m_gptAsyncOp)
+    {
+        if (!m_conversationInitialized)
         {
-            m_inferThreadRunning = true;
+            // Poll for tokens (non-blocking - returns immediately!)
+            if (auto result = m_gptAsyncOp->try_get_results()) {
+                if (!result->tokens.empty())
+                {                
+                    nvtx3::scoped_range r{ "PollGPT received pre-init token" };
+                }
+                std::cout << result->tokens; // Show immediately!
 
-            {
-                std::scoped_lock lock(m_mtx);
-                messages.push_back({ Message::Type::Answer, "" });
-            }
-
-            if (!m_gptChat) {
-                donut::log::error("GPT Chat interface not initialized");
-                m_inferThreadRunning = false;
-                return;
-            }
-
-            if (m_hwiCommon)
-                m_hwiCommon->SetGpuInferenceSchedulingMode(m_schedulingMode);
-
-            // Initialize conversation with system prompt if not already done
-            if (!m_conversationInitialized)
-            {
-                auto init_result = m_gptChat->send_message(
-                    { .role = nvigi::gpt::Instance::Chat::Message::Role::System,
-                      .content = m_systemPromptGPT
-                    }
-                );
-                if (!init_result) {
-                    donut::log::error("Failed to initialize GPT conversation: %s", init_result.error().what().c_str());
-                    m_inferThreadRunning = false;
+                // Can inspect state for debugging or control flow
+                if (result->state == nvigi::gpt::ExecutionState::Done) {
+                    std::cout << "\n[System prompt inference complete]";
+                }
+                else if (result->state == nvigi::gpt::ExecutionState::Cancel) {
+                    std::cout << "\n[System prompt inference cancelled]";
                     return;
                 }
-                m_conversationInitialized = true;
-            }
-
-            m_gpt.m_running.store(true);
-            m_gptFirstTokenTimer.Start();
-
-            // Send user message with callback for streaming
-            auto result = m_gptChat->send_message(
-                { .role = nvigi::gpt::Instance::Chat::Message::Role::User,
-                  .content = prompt
-                },
-                [this](std::string_view response, nvigi::gpt::ExecutionState state) -> nvigi::gpt::ExecutionState {
-                    std::string str(response);
-                    
-                    // Stop timer on first token
-                    if (!str.empty() && m_gptFirstTokenTimer.running) {
-                        m_gptFirstTokenTimer.Stop();
-                    }
-
-                    // Clean up response text (remove common tags)
-                    if (str.find("<JSON>") == std::string::npos) {
-                        // Remove the most common tags that may appear in the output
-                        str = std::regex_replace(str, std::regex("</?THINK>", std::regex::icase), "");
-                        str = std::regex_replace(str, std::regex("</?USER>", std::regex::icase), "");
-                        str = std::regex_replace(str, std::regex("</?AGENT>", std::regex::icase), "");
-                        
-                        // Append to messages
-                        if (!messages.empty()) {
-                            std::scoped_lock lock(m_mtx);
-                            messages.back().text.append(str);
-                        }
-                    }
-
-                    // Send to TTS for audio output
-                    bool done = (state == nvigi::gpt::ExecutionState::Done);
-                    if (m_tts.m_ready) {
-                        AppendTTSText(str, done);
-                    }
-
-                    // Wait for TTS to complete if we're done
-                    if (done && m_tts.m_ready) {
-                        std::unique_lock lck(m_tts.m_callbackMutex);
-                        m_tts.m_callbackCV.wait(lck, [this]() { 
-                            return m_tts.m_callbackState != nvigi::tts::ExecutionState::DataPending; 
-                        });
-                        m_ttsOutputAudio.clear();
-                    }
-
-                    return state; // Continue with current state
+                else if (result->state == nvigi::gpt::ExecutionState::Invalid) {
+                    std::cout << "\n[System prompt inference error]";
+                    return;
                 }
-            );
-
-            if (!result) {
-                donut::log::error("GPT inference failed: %s", result.error().what().c_str());
             }
 
-            m_gpt.m_running.store(false);
-            m_inferThreadRunning = false;
-        };
-    m_inferThread = std::make_unique<std::thread>(l);
+            // Check if done
+            if (m_gptAsyncOp->is_complete()) {
+                m_gptChat->finalize_async_response(*m_gptAsyncOp);
+                m_gptAsyncOp->reset(); // Optional here since we're breaking, but good practice if reusing variable
+                m_gptAsyncOp.reset();
+                m_conversationInitialized = true;
+                m_gpt.m_ready.store(true);
+            }
+        }
+        else
+        {
+            std::string str{};
+
+            // Poll for tokens (non-blocking - returns immediately!)
+            if (auto result = m_gptAsyncOp->try_get_results()) {
+                nvtx3::scoped_range r{ "PollGPT received answer tokens" };
+                // Can inspect state for debugging or control flow
+                if (result->state == nvigi::gpt::ExecutionState::Done) {
+                    std::cout << "\n[System prompt inference complete]";
+                }
+                else if (result->state == nvigi::gpt::ExecutionState::Cancel) {
+                    std::cout << "\n[System prompt inference cancelled]";
+                }
+                else if (result->state == nvigi::gpt::ExecutionState::Invalid) {
+                    std::cout << "\n[System prompt inference error]";
+                    if (m_nvtxGptFirstTokenRangeActive) {
+                        nvtxRangeEnd(m_nvtxGptFirstTokenRangeId);
+                        m_nvtxGptFirstTokenRangeActive = false;
+                    }
+                    return;
+                }
+                str = result->tokens; // Show immediately!
+
+                // Stop timer on first token
+                if (!str.empty() && m_gptFirstTokenTimer.running) {
+                    nvtx3::scoped_range r{ "Received first token" };
+                    m_gptFirstTokenTimer.Stop();
+                    if (m_nvtxGptFirstTokenRangeActive) {
+                        nvtxRangeEnd(m_nvtxGptFirstTokenRangeId);
+                        m_nvtxGptFirstTokenRangeActive = false;
+                    }
+                }
+
+                // Clean up response text (remove common tags)
+                if (str.find("<JSON>") == std::string::npos) {
+                    // Remove the most common tags that may appear in the output
+                    str = std::regex_replace(str, std::regex("</?THINK>", std::regex::icase), "");
+                    str = std::regex_replace(str, std::regex("</?USER>", std::regex::icase), "");
+                    str = std::regex_replace(str, std::regex("</?AGENT>", std::regex::icase), "");
+
+                    // Append to messages
+                    if (!messages.empty()) {
+                        std::scoped_lock lock(m_mtx);
+                        messages.back().text.append(str);
+                    }
+                }
+            }
+
+            // Send to TTS for audio output
+            bool done = m_gptAsyncOp->is_complete();
+            if (m_tts.m_ready && (!str.empty() || done)) {
+                nvtx3::scoped_range r{ "Send to TTS" };
+                AppendTTSText(str, done);
+            }
+
+            // Check if done
+            if (done) {
+                m_gptChat->finalize_async_response(*m_gptAsyncOp);
+                m_gptAsyncOp->reset(); // Optional here since we're breaking, but good practice if reusing variable
+                m_gptAsyncOp.reset();
+                m_gpt.m_running.store(false);
+                if (m_nvtxGptFirstTokenRangeActive) {
+                    nvtxRangeEnd(m_nvtxGptFirstTokenRangeId);
+                    m_nvtxGptFirstTokenRangeActive = false;
+                }
+            }
+        }
+    }
 }
 
 void NVIGIContext::AppendTTSText(std::string text, bool done)
@@ -1756,20 +1945,26 @@ void NVIGIContext::AppendTTSText(std::string text, bool done)
 
             // Synchronous TTS inference. We wait for TTS to finish before resuming GPT
             if (m_tts.m_ready)
-                LaunchTTS(chunkToProcess);
+                LaunchTTS(chunkToProcess, done);
         }
+    }
+    else if (m_tts.m_ready && done)
+    {
+        LaunchTTS("", true);
     }
 }
 
-void NVIGIContext::LaunchTTS(std::string prompt)
+void NVIGIContext::LaunchTTS(std::string prompt, bool final)
 {
+    nvtx3::scoped_range r{ "LaunchTTS" };
+
     if (m_newInferenceSequence)
-    { 
+    {
         m_ttsFirstAudioTimer.Start();
+        m_nvtxTtsFirstAudioRangeId = nvtxRangeStartA("nvigi.3d: TTS time to first audio");
+        m_nvtxTtsFirstAudioRangeActive = true;
         m_newInferenceSequence = false;
     }
-    
-    m_inferThreadRunning = true;
 
     // Remove non-UTF-8 characters inside a string
     auto removeNonUTF8 = [](const std::string& input)->std::string
@@ -1786,7 +1981,7 @@ void NVIGIContext::LaunchTTS(std::string prompt)
             }
             return output;
         };
-    
+
     auto preprocessPrompt = [](std::string prompt)->std::string
         {
             // GPT answers can produce a lot of asterisks, and TTS will read them as a word.
@@ -1794,91 +1989,104 @@ void NVIGIContext::LaunchTTS(std::string prompt)
 
             // Step 1: Temporarily replace number*number patterns with a placeholder
             std::string result = std::regex_replace(prompt, std::regex(R"((\d)\*(\d))"), "$1MULT$2");
-            
+
             // Step 2: Remove all remaining asterisks
             result = std::regex_replace(result, std::regex(R"(\*)"), "");
-            
+
             // Step 3: Restore the multiplication patterns
             result = std::regex_replace(result, std::regex(R"(MULT)"), "*");
-            
+
             return result;
         };
 
     std::string promptNonUTF8 = removeNonUTF8(preprocessPrompt(prompt));
-    static std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> convert;
-    std::string targetPathSpectrogram = convert.to_bytes(GetNVIGICoreDllPath().c_str()) + "/" + m_ttsInferenceCtx.m_selectedTargetVoice + "_se.bin";
 
-    m_tts.m_callbackState.store(nvigi::tts::ExecutionState::DataPending);
-
-    if (m_hwiCommon)
-        m_hwiCommon->SetGpuInferenceSchedulingMode(m_schedulingMode);
+    m_ttsTexts.push(std::tuple<std::string,bool>(promptNonUTF8, final));
 
     m_tts.m_running.store(true);
+}
 
-    // Setup runtime config
-    nvigi::tts::RuntimeConfig config;
-    config.n_timesteps = 16;
+void NVIGIContext::PollTTS()
+{    
+    if (m_ttsAsyncOp && !m_ttsAsyncOp->is_complete())
+    {
+        nvtx3::scoped_range r{ "PollTTS received message" };
 
-    // Modern callback signature: (const int16_t* audio, size_t samples, ExecutionState state)
-    auto result = m_ttsInstance->generate(
-        prompt,
-        targetPathSpectrogram,
-        config,
-        [this](const int16_t* audio, size_t samples, nvigi::tts::ExecutionState state) -> nvigi::tts::ExecutionState {
-            // Stop timer on first audio
-            if (state == nvigi::tts::ExecutionState::DataPending || state == nvigi::tts::ExecutionState::Done) {
+        // Try to get results (non-blocking!)
+        if (auto result = m_ttsAsyncOp->try_get_results()) {
+            if (!result->audio.empty()) {
                 m_ttsFirstAudioTimer.Stop();
-            }
+                if (m_nvtxTtsFirstAudioRangeActive) {
+                    nvtx3::scoped_range r{ "Received first audio" };
+                    nvtxRangeEnd(m_nvtxTtsFirstAudioRangeId);
+                    m_nvtxTtsFirstAudioRangeActive = false;
+                }
 
-            // Process audio chunks
-            if (audio && samples > 0) {
-                std::scoped_lock lck(m_tts.m_callbackMutex);
-
+                // Write audio chunk to file
                 // Accumulate audio
-                std::vector<int16_t> tempChunkAudio;
-                for (size_t i = 0; i < samples; i++) {
-                    m_ttsOutputAudio.push_back(audio[i]);
-                    tempChunkAudio.push_back(audio[i]);
+                std::vector<int16_t>* tempChunkAudio = new std::vector<int16_t>;
+                for (size_t i = 0; i < result->audio.size(); i++) {
+                    m_ttsOutputAudio.push_back(result->audio[i]);
+                    tempChunkAudio->push_back(result->audio[i]);
                 }
 
                 // Play audio chunk in a separate thread
-                auto playAudio = [](const std::vector<int16_t>& audio_data_int16, std::mutex& mtxPlayAudio) -> void {
+                auto playAudio = [](const std::vector<int16_t>* audio_data_int16, std::mutex& mtxPlayAudio) -> void {
+                    nvtx3::scoped_range r{ "play audio chunk" };
                     constexpr int bytesPerSample = 16;
                     constexpr int sampling_rate = 22050;
 
                     mtxPlayAudio.lock();
                     nvigi::utils::Player player(bytesPerSample, sampling_rate);
                     nvigi::utils::Buffer buffer(player,
-                        audio_data_int16.data(),
-                        (DWORD)(audio_data_int16.size() * sizeof(int16_t)));
+                        audio_data_int16->data(),
+                        (DWORD)(audio_data_int16->size() * sizeof(int16_t)));
                     buffer.Play();
                     buffer.Wait();
                     mtxPlayAudio.unlock();
+                    delete audio_data_int16;
                     };
 
                 m_ttsInferenceCtx.playAudioThreads.push(
                     std::make_unique<std::thread>(playAudio, tempChunkAudio, std::ref(m_ttsInferenceCtx.mtxPlayAudio)));
             }
-
+        }
+    }
+    else // either !m_ttsAsyncOp or m_ttsAsyncOp is complete
+    {
+        if (!m_ttsTexts.empty())
+        {
+            if (m_ttsAsyncOp)
             {
-                std::unique_lock lck(m_tts.m_callbackMutex);
-                m_tts.m_callbackState.store(state);
-                m_tts.m_callbackCV.notify_one();
+                m_ttsAsyncOp->reset();
+                m_ttsAsyncOp.reset();
             }
 
-            return state;
-        }
-    );
+            auto prompt = m_ttsTexts.front();
+            m_ttsTexts.pop();
+            m_ttsInputDone = std::get<1>(prompt); 
 
-    if (!result)
-    {
-        m_tts.m_callbackState.store(nvigi::tts::ExecutionState::Invalid);
-        m_tts.m_callbackCV.notify_one();
+            // Setup runtime config
+            nvigi::tts::RuntimeConfig config;
+            config.n_timesteps = 16;
+
+            static std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> convert;
+            std::string targetPathSpectrogram = convert.to_bytes(GetNVIGICoreDllPath().c_str()) + "/" + m_ttsInferenceCtx.m_selectedTargetVoice + "_se.bin";
+            m_ttsAsyncOp = m_ttsInstance->generate_async(std::get<0>(prompt), targetPathSpectrogram, config).value();
+        }
     }
 
-    m_tts.m_running.store(false);
-
-    m_inferThreadRunning = false;
+    if (m_ttsInputDone && m_ttsAsyncOp && m_ttsAsyncOp->is_complete())
+    {
+        m_ttsAsyncOp->reset();
+        m_ttsAsyncOp.reset();
+        m_tts.m_running.store(false);
+        if (m_nvtxTtsFirstAudioRangeActive) {
+            nvtx3::scoped_range r{ "Received first audio" };
+            nvtxRangeEnd(m_nvtxTtsFirstAudioRangeId);
+            m_nvtxTtsFirstAudioRangeActive = false;
+        }
+    }
 }
 
 void NVIGIContext::FlushInferenceThread()
@@ -1888,6 +2096,15 @@ void NVIGIContext::FlushInferenceThread()
         m_inferThread->join();
     }
     m_inferThread.reset();
+}
+
+void NVIGIContext::FlushLoadingThread()
+{
+    if (m_loadingThread && m_loadingThread->joinable())
+    {
+        m_loadingThread->join();
+    }
+    m_loadingThread.reset();
 }
 
 bool NVIGIContext::ModelsComboBox(const std::string& label, bool automatic, StageInfo& stage, PluginModelInfoPtr& value)
@@ -2010,6 +2227,10 @@ bool NVIGIContext::ModelsComboBox(const std::string& label, bool automatic, Stag
                         else if (newInfo->m_modelStatus == ModelStatus::AVAILABLE_MANUAL_DOWNLOAD)
                         {
                             ImGui::TextDisabled((newInfo->m_caption + ": MANUAL DOWNLOAD").c_str());
+                        }
+                        else if (newInfo->m_modelStatus == ModelStatus::UNAVAILABLE)
+                        {
+                            ImGui::TextDisabled((newInfo->m_caption + ": RUN APP WITH DIFFERENT INFER OPTION").c_str());
                         }
                     }
                 }
@@ -2215,6 +2436,7 @@ bool NVIGIContext::BuildOptionsUI()
 void NVIGIContext::BuildModelsStatusUI()
 {
     ImGui::Separator();
+    ImGui::Text(m_useCUDAInference ? "Using CUDA-based inference" : "Using 3D API-based inference");
 
     if (m_asr.m_ready)
     {
@@ -2261,7 +2483,7 @@ void NVIGIContext::BuildModelsStatusUI()
 
 void NVIGIContext::BuildChatUI()
 {
-    if (m_gpt.m_ready || m_tts.m_ready)
+    if (m_asr.m_ready || m_gpt.m_ready || m_tts.m_ready)
     {
         std::scoped_lock lock(m_mtx);
 
@@ -2335,10 +2557,14 @@ void NVIGIContext::BuildChatUI()
                     }
                     else if (m_tts.m_ready)
                     {
+                        FlushInferenceThread();
+                        FlushLoadingThread();
+
                         m_newInferenceSequence = true;
 
                         auto inferTTS = [this]()->void
                             {
+                                nvtx3::scoped_range r{ "inferTTS" };
                                 AppendTTSText(inputBuffer, true);
                                 inputBuffer[0] = '\0';  // Clear the buffer
                             };
@@ -2363,16 +2589,13 @@ void NVIGIContext::BuildChatUI()
                 {
                     if (ImGui::Button("Stop"))
                     {
-                        m_recording = false;
+                        StopASR();
                     }
                 } // Do not show Record button when ASR or GPT is running
                 else if (!m_gpt.m_running && !m_asr.m_running && ImGui::Button("Record"))
                 {
                     FlushInferenceThread();
-                    m_recording = true;
-
-                    m_a2t = "";
-                    m_gptInput = "";
+                    FlushLoadingThread();
                     LaunchASR();
                 }
             }
@@ -2390,8 +2613,6 @@ void NVIGIContext::BuildChatUI()
         }
         if (ImGui::BeginChild("Performance"))
         {
-            if (m_asr.m_ready)
-                ImGui::Text("ASR First Text: %.2f ms", m_asrTimer.GetElapsedMiliseconds());
             if (m_gpt.m_ready)
                 ImGui::Text("GPT First Token: %.2f ms", m_gptFirstTokenTimer.GetElapsedMiliseconds());
             if (m_tts.m_ready)
@@ -2415,16 +2636,14 @@ void NVIGIContext::BuildUI()
     if (m_gptInputReady && !m_asr.m_running)
     {
         m_gptInputReady = false;
+        if (m_gptInput != "") // Avoid sending empty prompts to GPT, which may cause a crash
+        {
+            if (m_gpt.m_ready) {
+                FlushInferenceThread();
+                FlushLoadingThread();
 
-        if (m_gpt.m_ready) {
-            FlushInferenceThread();
-            if (m_recordingData)
-            {
-                auto audioData = AudioRecorder::StopRecording(m_recordingData);
-                m_recordingData = nullptr;
+                LaunchGPT(m_gptInput);
             }
-
-            LaunchGPT(m_gptInput);
         }
     }
 

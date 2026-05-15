@@ -433,6 +433,7 @@ inline bool check_leaks() {
             g_memory_allocation_count.load());
     }
     
+
     return hasLeaks;
 }
 

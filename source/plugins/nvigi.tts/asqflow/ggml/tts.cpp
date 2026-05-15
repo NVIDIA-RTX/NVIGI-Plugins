@@ -19,12 +19,14 @@
 #include "source/utils/nvigi.poll/poll.h"
 #include "_artifacts/gitVersion.h"
 #include "external/json/source/nlohmann/json.hpp"
-#include "external/asqflow.cpp/include/asqflow.h"
+#include "asqflow.h"
 #include "source/plugins/nvigi.tts/asqflow/ggml/tts.h"
 #include "source/utils/nvigi.hwi/cuda/runtime_context_scope.h"
 #include "nvigi_stl_helpers.h"
 #include <functional>
 #include <chrono>
+
+#include "nvtx3/nvtx3.hpp"
 
 using json = nlohmann::json;
 
@@ -39,9 +41,7 @@ using json = nlohmann::json;
 #include "source/core/nvigi.api/nvigi_d3d12.h"
 #include "source/plugins/nvigi.hwi/d3d12/nvigi_hwi_d3d12.h"
 #include "source/utils/nvigi.d3d12/d3d12_helpers.h"
-#if PROFILE_D3D
-#include "nvtx3/nvToolsExt.h"
-#endif
+
 namespace nvigi {
     // this should match the PFun_commandListAction defined in WhisperCPP - redefining as it's at a depth/scope in WhisperCPP not exposed to IGI
     using PFun_commandListAction = void(ID3D12CommandList* pCommandList, int action);
@@ -252,6 +252,8 @@ namespace nvigi
 
     nvigi::Result asqflowCreateInstance(const nvigi::NVIGIParameter *_params, nvigi::InferenceInstance **_instance)
     {        
+        nvtx3::scoped_range r{ "asqflowCreateInstance" };
+
         auto common = findStruct<CommonCreationParameters>(_params);
         auto creationParams = findStruct<TTSCreationParameters>(_params);
         auto asqfCreationParams = findStruct<TTSASqFlowCreationParameters>(_params);
@@ -399,8 +401,19 @@ namespace nvigi
             NVIGI_LOG_INFO("Vocoder model : %s", instanceData->vocoderModelPath.c_str());
 
             {
-#if GGML_USE_CUDA                
-                nvigi::RuntimeContextScope scope(*instanceData);                
+#if GGML_USE_CUDA
+                // Multi GPU / CIG support:
+                // ggml_backend_cuda_reg checks whether it has been called before, 
+                // and if not iterates over all CUDA devices and initializes them.
+                // For each iteration, cudart calls cuDevicePrimaryCtxRetain, which
+                // sets the context to the primary context, which is non-CIG. 
+                // To be able to support CIG we need to set the context and not have
+                // anyone else change it.
+                // So we call ggml_backend_cuda_reg here outside the 
+                // RuntimeContextScope. That way it will never be called again, and
+                // we have full control of the context inside the scope.
+                ggml_backend_reg_t cuda_reg = ggml_backend_cuda_reg();
+                nvigi::RuntimeContextScope scope(*instanceData);
 #elif defined GGML_USE_VULKAN
                 auto vkParams = findStruct<VulkanParameters>(_params);
                 if (vkParams)
@@ -421,48 +434,49 @@ namespace nvigi
                 {
                     return res;
                 }
+                PFun_commandListAction* CLresetCallback = nullptr;
                 if (vendor == VendorId::eNVDA)
                 {
                     if (!ctx.iscg && !framework::getInterface(plugin::getContext()->framework, plugin::hwi::d3d12::kId, &ctx.iscg))
                     {
-                        NVIGI_LOG_ERROR("Missing interface from 'nvigi.plugin.hwi.d3d12'");
-                        return kResultInvalidState;
+                        NVIGI_LOG_WARN("Missing interface from 'nvigi.plugin.hwi.d3d12', scheduling mode will not be applied");
                     }
 
-                    if (NVIGI_FAILED(res, d3d12::applyNVDASpecificSettings(d3d12Params, ctx.iscg)))
+                    if (ctx.iscg)
                     {
-                        return res;
-                    }
-                }
-
-                auto applySchedulingModeCallback = [](ID3D12CommandList* pCommandList, int action)
-                    {
-                        // Don't check iscg and version every call, because we do it once when callback is registered
-                        IHWID3D12* iscg = asqflow::getContext()->iscg;
-                        ID3D12GraphicsCommandList* pGraphicsCommandList = nullptr;
-                        if (SUCCEEDED(pCommandList->QueryInterface<ID3D12GraphicsCommandList>(&pGraphicsCommandList)))
+                        if (NVIGI_FAILED(res, d3d12::applyNVDASpecificSettings(d3d12Params, ctx.iscg)))
                         {
-                            iscg->d3d12ApplyGlobalGpuInferenceSchedulingModeToCommandList(pGraphicsCommandList);
+                            return res;
                         }
-                    };
 
-                // Do iscg and version checks now to avoid doing them inside every callback       
-                PFun_commandListAction* CLresetCallback = nullptr;
-                IHWID3D12* iscg = asqflow::getContext()->iscg;
-                if (iscg)
-                {
-                    if (iscg->getVersion() >= 4)
-                    {
-                        CLresetCallback = applySchedulingModeCallback;
+                        auto applySchedulingModeCallback = [](ID3D12CommandList* pCommandList, int action)
+                            {
+                                // Don't check iscg and version every call, because we do it once when callback is registered
+                                constexpr int kGgmlCommandListActionDispatchBegin = 2;
+                                if (action != kGgmlCommandListActionDispatchBegin)
+                                    return;
+                                IHWID3D12* iscg = asqflow::getContext()->iscg;
+                                ID3D12GraphicsCommandList* pGraphicsCommandList = nullptr;
+                                if (SUCCEEDED(pCommandList->QueryInterface<ID3D12GraphicsCommandList>(&pGraphicsCommandList)))
+                                {
+                                    iscg->d3d12ApplyGlobalGpuInferenceSchedulingModeToCommandList(pGraphicsCommandList);
+                                    pGraphicsCommandList->Release();
+                                }
+                            };
+
+                        if (ctx.iscg->getVersion() >= 4)
+                        {
+                            CLresetCallback = applySchedulingModeCallback;
+                        }
+                        else
+                        {
+                            NVIGI_LOG_WARN_ONCE("We need version 4 of hwi.d3d12 in order to set D3D12 compute scheduling mode, and version available is %d. Performance may be suboptimal.\n", ctx.iscg->getVersion());
+                        }
                     }
                     else
                     {
-                        NVIGI_LOG_WARN_ONCE("We need version 4 of hwi.d3d12 in order to set D3D12 compute scheduling mode, and version available is %d. Performance may be suboptimal.\n", iscg->getVersion());
+                        NVIGI_LOG_WARN_ONCE("hwi.d3d12 was not loaded, so couldn't set D3D12 compute scheduling mode. Performance may be suboptimal.\n");
                     }
-                }
-                else
-                {
-                    NVIGI_LOG_WARN_ONCE("hwi.d3d12 was not loaded, so couldn't set D3D12 compute scheduling mode. Performance may be suboptimal.\n");
                 }
 
                 bool allowReBAR = d3d12Params->getVersion() < 3 || !(d3d12Params->flags & nvigi::D3D12ParametersFlags::eDisableReBAR);
@@ -656,9 +670,7 @@ namespace nvigi
 
     nvigi::Result asqflowEvaluate(nvigi::InferenceExecutionContext *execCtx, bool async = false)
     {
-#if GGML_USE_CUDA || (GGML_USE_D3D12 && PROFILE_D3D)
-        nvtxRangePushA("asqflowEvaluate");
-#endif
+        nvtx3::scoped_range r{ "asqflowEvaluate" };
 
         auto &ctx = (*asqflow::getContext());
 
@@ -728,17 +740,12 @@ namespace nvigi
 #elif GGML_USE_D3D12
     if (ctx.iscg)
     {
-#if PROFILE_D3D
-        nvtxRangePushA("TTS: Set D3D priority");
-#endif
+        nvtx3::scoped_range r{ "TTS: Set D3D priority" };
         nvigi::Result d3derr = ctx.iscg->d3d12ApplyGlobalGpuInferenceSchedulingModeToThread(instance->device);
         if (d3derr != kResultOk)
         {
             NVIGI_LOG_WARN_ONCE("Could not set relative priority of D3D12 compute and graphics. Please use 575 driver or higher\n");
         }
-#if PROFILE_D3D
-        nvtxRangePop();
-#endif
     }
 #endif
 
@@ -887,6 +894,7 @@ namespace nvigi
                     [execCtx, instance, asqflowReturnOutputAudio, spectrogramPath, speechRate, 
                      nTimesteps, minChunkSize, maxChunkSize, seed, sampler, dpmpp_order, use_flash_attention, language]() -> nvigi::Result
                 {
+                    nvtx3::scoped_range r{"asqflow evaluate async"};
                     while (instance->sync.running.load() && !instance->cancelled.load() && !instance->promptsToProcess.empty())
                     {
 #if GGML_USE_CUDA
@@ -959,7 +967,7 @@ namespace nvigi
                                     language
                                 );
 
-                                if (res != nvigi::kResultOk)
+                                if (res != nvigi::kResultOk && res != nvigi::kResultCanceled)
                                 {
                                     NVIGI_LOG_ERROR("Async TTS inference failed");
                                     asqflowReturnOutputAudio({}, "", nvigi::kInferenceExecutionStateInvalid);
@@ -1054,10 +1062,6 @@ namespace nvigi
                 result = kResultInvalidState;
             }
         }
-
-#if GGML_USE_CUDA || (GGML_USE_D3D12 && PROFILE_D3D)
-        nvtxRangePop();
-#endif
 
         return result;
     }

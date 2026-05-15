@@ -2,7 +2,7 @@
 
 The D3D12 model-reloading sample, `nvigi.reload` shows how a D3D12-based NVIGI application can manually load and unload models for D3D12 GGML-based plugins to/from VRAM.  This allows an application to reclaim VRAM when inference is not in use, or to have two model instances ready to quickly swap in and out of VRAM as desired, avoiding having to choose between time-consuming load-from file and keeping multiple models in VRAM at once.  It is automatically built as a part of the SDK build.  It allows direct typing "to" an LLM as well as the ability to select when to switch models without reloading from file.  It shows the current VRAM use along the way.  Nore that the VRAM use may not match what is shown as available in other tools such as `nvidia-smi`.  This is because D3D12 manages its own memory, and so once a model is loaded that uses a given amount of memory, when that model is unloaded, the memory is indeed available to other D3D12 app uses (e.g. textures), but D3D12 may not release the memory back to the OS for use by other applications.
 
-Because of the SDK layout, once the components are built they will be under the `_artifacts` tree; in order for the SDK to run an app like the sample, all of these DLLs and the executable must be in the same directory.  We do this by copying the DLLs and EXE into the `bin\x64` directory, and running the app from within that directory, so all plugins are available.
+Because of the SDK layout, once the components are built they will be under the `_artifacts` tree; in order for the SDK to run an app like the sample, all of these DLLs and the executable must be in the same directory.  We do this by copying the DLLs and EXE into the `bin\x64\Release` directory, and running the app from within that directory, so all plugins are available.
 
 Normally, whether the plugins have been built from a binary, "standard layout" app developer pack or from GitHub source, this is done via the `copy_sdk_binaries.bat`, whose use is described in the base documentation for the binary app developer pack or GitHub README.  The rest of this document assumes that the binaries are up to date and have been copied.
 
@@ -39,11 +39,11 @@ To run `nvigi.reload` from the command line, take the following steps (`--models
 1. Open a command prompt in `<SDK_ROOT>`
 2. Run the command:
 ```sh
-bin\x64\nvigi.reload.exe --models <SDK_MODELS>
+bin\x64\Release\nvigi.reload.exe --models <SDK_MODELS>
 ```
 3. In a standard layout binary development pack or GitHub source tree, launching from a current working directory of the `<SDK_ROOT>` directory, this is:
 ```sh
-bin\x64\nvigi.reload.exe --models data/nvigi.models
+bin\x64\Release\nvigi.reload.exe --models data/nvigi.models
 ```
 
 Here are the command line options:
@@ -63,9 +63,9 @@ To run `nvigi.reload` in the debugger, we must ensure that all of the plugins an
 1. One-time setup in the project file (needs to be redone if `_project` is deleted):
     1. In the MSVC IDE, edit the project config settings for `nvigi/samples/nvigi.reload`
     1. Navigate to the "Debugging" settings
-    1. Set "Command" to `<SDK_ROOT>\bin\x64\nvigi.reload.exe`
+    1. Set "Command" to `<SDK_ROOT>\bin\x64\Release\nvigi.reload.exe`
     1. Set "Command Arguments" as needed (see the command line options in the above section)
-    1. Set "Working Directory" to `<SDK_ROOT>/bin/x64`
+    1. Set "Working Directory" to `<SDK_ROOT>/bin/x64/Release`
 1. Build the desired non-production config of the SDK; Release is recommended (it is optimized, but contains symbols)
 1. After each (re-)build, re-run `copy_sdk_binaries.bat <cfg>`
 1. The sample can now be run in the debugger.

@@ -19,7 +19,7 @@ This directory contains the main AI plugins for integrating In-Game Inferencing-
 
 ## Prerequisites
 
-| NVIGI version 1.5.0 | Minimum | Recommended |
+| NVIGI version 1.6.0 | Minimum | Recommended |
 |:--------------------|:--------|:------------|
 |GPU|RTX 30x0/A600|RTX 4080/4090 or RTX 5080/5090|
 |VRAM|8GB|12GB|
@@ -87,7 +87,7 @@ This directory junction link can be done easily by running the following command
    2. Run `copy_sdk_binaries.bat Release`
 4. Run the sample (assumes that the models have been downloaded as per initial setup instructions)
    1. Open a (or use an existing) VS2022 Development Command Prompt to the SDK (a.k.a. `<SDK_PLUGINS>`) directory
-   2. Run `bin\x64\nvigi.basic.exe --models data\nvigi.models`
+   2. Run `bin\x64\Release\nvigi.basic.exe --models data\nvigi.models`
 
 ## Basic Steps: Detailed Breakdown
 
@@ -126,12 +126,12 @@ virtual machines that require zero configuration.
 
 ### "Installing" Built Binaries
 
-Once you build your own binaries, either the SDK DLLs or the Sample executable, those will reside in `_artifacts`, not `bin\x64`.  After building any configuration (Release, Debug, etc), you will need to run the `copy_sdk_binaries.bat <cfg>` script.  If you build the Release config, this would be:
+Once you build your own binaries, either the SDK DLLs or the Sample executable, those will reside in `_artifacts`, not `bin\x64\Release`.  After building any configuration (Release, Debug, etc), you will need to run the `copy_sdk_binaries.bat <cfg>` script.  If you build the Release config, this would be:
 
 1. Open a command prompt to the SDK root
 1. run `copy_sdk_binaries.bat Release`
 
-This will copy the core lib, the DLLs and the exes to `bin\x64` and should be done before trying the next section.
+This will copy the core lib, the DLLs and the exes to `bin\x64\Release` and should be done before trying the next section.
 
 ### Samples
 

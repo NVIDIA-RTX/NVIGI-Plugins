@@ -78,7 +78,7 @@ NVIGI_VALIDATE_STRUCT(GPTCreationParameters)
 // {FEB5F4A9-8A02-4864-8757-081F42381160}
 struct alignas(8) GPTRuntimeParameters {
     GPTRuntimeParameters() {}; 
-    NVIGI_UID(UID({ 0xfeb5f4a9, 0x8a02, 0x4864,{ 0x87, 0x57, 0x8, 0x1f, 0x42, 0x38, 0x11, 0x60 } }), kStructVersion5);
+    NVIGI_UID(UID({ 0xfeb5f4a9, 0x8a02, 0x4864,{ 0x87, 0x57, 0x8, 0x1f, 0x42, 0x38, 0x11, 0x60 } }), kStructVersion6);
     uint32_t seed = 0xFFFFFFFF;     // RNG seed
     int32_t tokensToPredict = -1;   // new tokens to predict
     int32_t batchSize = 512;        // batch size for prompt processing (must be >=32 to use BLAS)
@@ -105,6 +105,8 @@ struct alignas(8) GPTRuntimeParameters {
     //! v5
     bool useJinja = true;           // if true use jinja formatting for prompt templates
     const char* chatTemplate{};     // provide custom template to use instead of the internal one (if any). It is recommended to provide custom template when using new models since internal defaults might not work correctly.
+    //! v6
+    float maxTimeoutSeconds = 60.0f; // max time (in seconds) to wait for async operations to complete (e.g. waiting for previous generation to finish before starting a new one)
 
     //! New members go here, remember to update the kStructVersionN in the above NVIGI_UID macro!
 };
@@ -154,6 +156,29 @@ struct alignas(8) GPTSamplerParameters
 };
 
 NVIGI_VALIDATE_STRUCT(GPTSamplerParameters)
+
+//! GPT session state interface (KV cache save/restore)
+//!
+//! Implemented by the GGML backend only. Use nvigiGetInterfaceDynamic(plugin_id, &iSessionState, ...)
+//! to obtain it. Session must be idle. Per-sequence (llama slot) state only — maps to llama_state_seq_*.
+//!
+//! {8E7F6D5C-4B3A-2918-0736-455463728190}
+struct alignas(8) IGPTSessionState {
+    IGPTSessionState() {};
+    NVIGI_UID(UID({ 0x8e7f6d5c, 0x4b3a, 0x2918,{ 0x07, 0x36, 0x45, 0x54, 0x63, 0x72, 0x81, 0x90 } }), kStructVersion1)
+
+    //! Required buffer size in bytes for seq_get_data. Returns 0 if session not idle or error.
+    size_t(*seq_get_data_size)(const InferenceInstance* instance) {};
+    //! Serialize this session's slot state into buffer. out_n_past must be passed to seq_set_data.
+    size_t(*seq_get_data)(const InferenceInstance* instance, unsigned char* buffer, size_t buffer_size, int* out_n_past) {};
+    //! Restore this session's slot state from buffer. n_past must be the value returned from seq_get_data.
+    bool (*seq_set_data)(const InferenceInstance* instance, const unsigned char* buffer, size_t buffer_size, int n_past) {};
+
+    //! v3+ members go here, remember to update the kStructVersionN in the above NVIGI_UID macro!
+};
+
+NVIGI_VALIDATE_STRUCT(IGPTSessionState)
+
 
 
 //! General Purpose Transformer (GPT) interface

@@ -237,13 +237,12 @@ inline nvigi::PluginID backend_to_plugin_id(std::string_view backend) {
     if (backend == "cuda")   return nvigi::plugin::tts::asqflow_ggml::cuda::kId;
     if (backend == "d3d12")  return nvigi::plugin::tts::asqflow_ggml::d3d12::kId;
     if (backend == "vulkan") return nvigi::plugin::tts::asqflow_ggml::vulkan::kId;
-    if (backend == "trt")    return nvigi::plugin::tts::asqflow_trt::kId;
     return nvigi::PluginID{};  // Invalid/null
 }
 
 // Check if a backend string is valid
 inline bool is_valid_backend(std::string_view backend) {
-    return backend == "cuda" || backend == "d3d12" || backend == "vulkan" || backend == "trt";
+    return backend == "cuda" || backend == "d3d12" || backend == "vulkan";
 }
 
 // Main TTS class implementation
@@ -282,7 +281,7 @@ public:
         // Check for valid backend
         if (!is_valid_backend(config.backend)) {
             return std::unexpected(Error(
-                std::format("Unsupported backend '{}', must be 'd3d12', 'cuda', 'vulkan', or 'trt' at {}:{}",
+                std::format("Unsupported backend '{}', must be 'd3d12', 'cuda', or 'vulkan' at {}:{}",
                     config.backend, loc.file_name(), loc.line())
             ));
         }

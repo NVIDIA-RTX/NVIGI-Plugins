@@ -3,12 +3,10 @@ require("vstudio")
 nvccPath = ROOT .. "external/cuda/bin/nvcc"
 
 function make_nvcc_command(nvccPath, nvccHostCompilerFlags, nvccFlags)
-    ext = iif(os.ishost("windows"), ".obj", ".o")
+    ext = ".obj"
     local buildString =  "\""..nvccPath.."\" -std=c++17 "..nvccFlags.." -Xcompiler="..commaficate(nvccHostCompilerFlags).." -c "..' %{table.implode(cfg.defines, "-D", "", " ")} '.." %{get_include_string(cfg.includedirs)} \"%{file.abspath}\" -o \"%{cfg.objdir}/%{file.basename}"..ext.."\""
 	if os.istarget("windows") then
 		buildcommands { buildString }
-	elseif os.istarget("linux") then
-	    buildcommands { "{MKDIR} %{cfg.objdir} ", buildString }
 	end
     buildmessage (buildString)
     buildoutputs { "%{cfg.objdir}/%{file.basename}"..ext }    
@@ -31,12 +29,6 @@ function add_cuda_dependencies_no_cudart()
 		filter { "files:**.cu", "configurations:not Debug" }
 			make_nvcc_command(nvccPath, "/MD", nvccWin..nvccFlags)
 		filter {}
-	elseif os.istarget("linux") then		
-		filter { "files:**.cu", "system:linux", "configurations:Debug"}
-			make_nvcc_command(nvccPath, "-fPIC -g", "-g "..nvccFlags)
-		filter { "files:**.cu", "system:linux", "configurations:not Debug" }
-			make_nvcc_command(nvccPath, "-fPIC", nvccFlags)
-		filter {}
 	end
 end
 
@@ -44,8 +36,6 @@ function add_cuda_dependencies()
 	add_cuda_dependencies_no_cudart()
     filter {"system:windows"}
 		links {"cudart_static.lib"}
-    filter {"system:linux"}
-		links {"cudart_static", "dl", "pthread", "rt"}
 	filter {}
 end
 

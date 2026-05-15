@@ -34,6 +34,7 @@ For cloud inference, configure the model in your cloud provider dashboard:
 | ------ | ---------- | ---- | ---- |
 | nvigi.plugin.gpt.cloud.rest | gpt-3.5-turbo | E9102ACB-8CD8-4345-BCBF-CCF6DC758E58 | https://api.openai.com/v1/chat/completions | 
 | nvigi.plugin.gpt.cloud.rest | Llama 3.2 3B Instruct | 01F43B70-CE23-42CA-9606-74E80C5ED0B6 | https://integrate.api.nvidia.com/v1/chat/completions |
+| nvigi.plugin.gpt.cloud.rest | Local LlamaCPP Server | 77A3AC99-0000-0000-0000-000000000000 | http://localhost:8080/v1/chat/completions |
 
 See the top-level documentation that shipped with your development pack for information on how to download these models.
 
@@ -45,7 +46,7 @@ The sample is built as part of the SDK build process. After building, copy the b
 copy_sdk_binaries.bat <cfg>
 ```
 
-This ensures all DLLs and the executable are in the same directory (`bin\x64`).
+This ensures all DLLs and the executable are in the same directory (`bin\x64\Release`).
 
 ## How to Use the GPT Sample
 
@@ -55,13 +56,13 @@ This ensures all DLLs and the executable are in the same directory (`bin\x64`).
 2. Run the command:
 
 ```sh
-bin\x64\nvigi.basic.gpt.cxx.exe --models <SDK_MODELS> --sdk bin\x64
+bin\x64\Release\nvigi.basic.gpt.cxx.exe --models <SDK_MODELS> --sdk bin\x64\Release
 ```
 
 3. In a standard layout binary development pack or GitHub source tree:
 
 ```sh
-bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64
+bin\x64\Release\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64\Release
 ```
 
 4. Wait for the initial system prompt to complete
@@ -74,14 +75,29 @@ bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64
 To use a cloud provider (e.g., OpenAI):
 
 ```sh
-bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 --backend cloud --token YOUR_API_KEY --guid "{E9102ACB-8CD8-4345-BCBF-CCF6DC758E58}"
+bin\x64\Release\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --backend cloud --token YOUR_API_KEY --guid "{E9102ACB-8CD8-4345-BCBF-CCF6DC758E58}"
 ```
 
 To use NVIDIA NIM:
 
 ```sh
-bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 --backend cloud --token YOUR_NVIDIA_API_KEY --guid "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}"
+bin\x64\Release\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --backend cloud --token YOUR_NVIDIA_API_KEY --guid "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}"
 ```
+
+### Local LlamaCPP
+
+In order to rapidly prototype on the very latest LlamaCPP, it may be useful to run against latest LlamaCPP.  This will not be as performant as models 
+running natively in IGI, but it will allow evalutation of new model qualitative results.
+
+To connect to a LlamaCPP instance running on your system:
+
+```sh
+bin\x64\Release\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --backend cloud --token "0" --guid "{77A3AC99-0000-0000-0000-000000000000}"
+```
+
+Note: Latest releases of llama.cpp can be found here, along with the llama-server.exe that needs to be started: https://github.com/ggml-org/llama.cpp/releases
+
+Consult the llama.cpp documentation for guides on how to run llama-server.exe: https://github.com/ggml-org/llama.cpp/tree/master/tools/server
 
 ## Command Line Options
 
@@ -108,25 +124,25 @@ Usage: nvigi.basic.gpt.cxx [options]
 ### Use a different local model:
 
 ```sh
-bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 --guid "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}"
+bin\x64\Release\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --guid "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}"
 ```
 
 ### Use Vulkan backend with 4-bit cache quantization:
 
 ```sh
-bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 --backend vulkan --cache-type q4_0
+bin\x64\Release\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --backend vulkan --cache-type q4_0
 ```
 
 ### Custom VRAM budget for large models:
 
 ```sh
-bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 --vram 16384
+bin\x64\Release\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --vram 16384
 ```
 
 ### Cloud with custom JSON request body:
 
 ```sh
-bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 --backend cloud --token YOUR_KEY --json custom_request.json
+bin\x64\Release\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --backend cloud --token YOUR_KEY --json custom_request.json
 ```
 
 ## API Patterns Demonstrated
@@ -188,7 +204,7 @@ The sample supports different KV cache quantization types to balance memory usag
 Use `--cache-type` to select:
 
 ```sh
-bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 --cache-type q4_0
+bin\x64\Release\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64\Release --cache-type q4_0
 ```
 
 ## Cloud Provider Configuration
@@ -196,7 +212,7 @@ bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 --cache
 ### OpenAI
 
 ```sh
-bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 ^
+bin\x64\Release\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64\Release ^
     --backend cloud ^
     --token sk-... ^
     --guid "{E9102ACB-8CD8-4345-BCBF-CCF6DC758E58}"
@@ -205,7 +221,7 @@ bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 ^
 ### NVIDIA NIM
 
 ```sh
-bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 ^
+bin\x64\Release\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64\Release ^
     --backend cloud ^
     --token nvapi-... ^
     --guid "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}"
@@ -214,7 +230,7 @@ bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 ^
 ### Custom OpenAI-Compatible API
 
 ```sh
-bin\x64\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64 ^
+bin\x64\Release\nvigi.basic.gpt.cxx.exe --models data/nvigi.models --sdk bin\x64\Release ^
     --backend cloud ^
     --url https://your-api.com/v1/chat/completions ^
     --token your-token ^
@@ -263,9 +279,9 @@ To run `nvigi.basic.gpt.cxx` in the debugger:
 1. One-time setup in the project file:
     1. In the MSVC IDE, edit the project config settings for `nvigi/samples/nvigi.basic.cxx/gpt`
     1. Navigate to the "Debugging" settings
-    1. Set "Command" to `<SDK_ROOT>\bin\x64\nvigi.basic.gpt.cxx.exe`
+    1. Set "Command" to `<SDK_ROOT>\bin\x64\Release\nvigi.basic.gpt.cxx.exe`
     1. Set "Command Arguments" as needed (see command line options above)
-    1. Set "Working Directory" to `<SDK_ROOT>/bin/x64`
+    1. Set "Working Directory" to `<SDK_ROOT>/bin/x64/Release`
 1. Build the desired non-production config; Release is recommended
 1. After each (re-)build, re-run `copy_sdk_binaries.bat <cfg>`
 1. The sample can now be run in the debugger

@@ -1,5 +1,12 @@
 # Release Notes
 
+## 1.6.0 Release
+- As of 1.6.0, the 3D Sample has been modified to use one GPU inference API per launch, which better matches what apps use and has fewer cross-API stability issues.  The sample now supports a command-line argument to select which GPU inference backend to use (CUDA or the current rendering API, D3D12/Vulkan) for the GGML-based plugins.  The sample will default to the 3D APIs if no argument is provided.
+- The 1.6.0 release removes the TensorRT based ASqFlow plugin as it was not found to be used by developers.
+- There is an issue under investigation with GPT inference occasionally hanging up in the 3D Sample in Direct3D 12 mode. The graphical animations continue but the timer for GPT and TTS inference keeps going indefinitely. If this happens please close and restart the 3D Sample. A fix will be in a future release.
+- Older Nemotron based models may produce undesired extra_id_1 or extra_id_2 type responses. If seen, truncate or filter as necessary.
+- If generation is terminated early, there is a chance that UTF-8 tokens are incomplete, and may lead to an error in the output string. The SDK currently filters for these errors by looking for `{"error"` in the response string. Future versions of IGI will attempt to catch these before they reach generation. These are most likely to occur when predict limit is hit, context window is exhausted, or generation is terminated unexpectedly.
+
 ## 1.5.0 Release
 - New code agent sample
 - New modern C++ code samples

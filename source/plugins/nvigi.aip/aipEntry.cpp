@@ -13,6 +13,8 @@
 #include "external/json/source/nlohmann/json.hpp"
 #include "source/plugins/nvigi.aip/nvigi_aip.h"
 
+#include "nvtx3/nvtx3.hpp"
+
 using json = nlohmann::json;
 
 namespace nvigi
@@ -92,6 +94,8 @@ const nvigi::InferenceDataDescriptorArray* getOutputSignature(InferenceInstanceD
 
 nvigi::Result aipEvaluate(nvigi::InferenceExecutionContext* execCtx)
 {
+    nvtx3::scoped_range r{ "AI Pipeline Evaluate" };
+
     //! Validate inputs
     
     if (!execCtx)
@@ -211,6 +215,8 @@ nvigi::Result aipEvaluate(nvigi::InferenceExecutionContext* execCtx)
 
     //! First stage, inputs coming from the host
     {
+        nvtx3::scoped_range r{ "stage 0" };
+
         auto& [inter, inst] = data->interfaceInstancePairs.front();
         data->stageIndex = 0;
         data->stageStates[data->stageIndex] = kInferenceExecutionStateInvalid;
@@ -227,6 +233,7 @@ nvigi::Result aipEvaluate(nvigi::InferenceExecutionContext* execCtx)
     //! The rest of the pipeline
     for (size_t i = 1; i < data->stageStates.size(); i++)
     {
+        nvtx3::scoped_range r{ std::string("stage ") + std::to_string(i) };
         auto& [inter, inst] = data->interfaceInstancePairs[i];
         data->stageIndex = (uint32_t)i;
         data->stageStates[data->stageIndex] = kInferenceExecutionStateInvalid;

@@ -248,6 +248,7 @@ int32_t main(int argc, char** argv)
         ch = _getch();
         if (ch == 'q') 
         {
+            // ESC key
             std::cout << "exiting...\n";
             exit(0);               // or return / set a flag, etc. [web:37]
         }

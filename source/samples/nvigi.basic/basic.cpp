@@ -4,8 +4,6 @@
 
 #ifdef NVIGI_WINDOWS
 #include <conio.h>
-#else
-#include <linux/limits.h>
 #endif
 
 #include <cassert>
@@ -43,26 +41,6 @@ extern "C" __declspec(dllexport) const char* D3D12SDKPath = ".\\D3D12\\";
 #include <source/utils/nvigi.dsound/recorder.h>
 #include <nvigi_stl_helpers.h>
 
-#if NVIGI_LINUX
-#include <unistd.h>
-#include <dlfcn.h>
-using HMODULE = void*;
-#define GetProcAddress dlsym
-#define FreeLibrary dlclose
-#define LoadLibraryA(lib) dlopen(lib, RTLD_LAZY)
-#define LoadLibraryW(lib) dlopen(nvigi::extra::toStr(lib).c_str(), RTLD_LAZY)
-
-#define sscanf_s sscanf
-#define strcpy_s(a,b,c) strcpy(a,c)
-#define strcat_s(a,b,c) strcat(a,c)
-#define memcpy_s(a,b,c,d) memcpy(a,c,d)
-typedef struct __LUID
-{
-    unsigned long LowPart;
-    long HighPart;
-} 	LUID;
-#endif
-
 #define DECLARE_NVIGI_CORE_FUN(F) PFun_##F* ptr_##F
 #define GET_NVIGI_CORE_FUN(lib, F) ptr_##F = (PFun_##F*)GetProcAddress(lib, #F)
 DECLARE_NVIGI_CORE_FUN(nvigiInit);
@@ -77,11 +55,7 @@ inline std::vector<int16_t> read(const char* fname)
         fs::path p(fname);
         size_t file_size = fs::file_size(p);
         std::vector<int16_t> ret_buffer(file_size / 2);
-#ifdef NVIGI_LINUX
         std::fstream file(fname, std::ios::binary | std::ios::in);
-#else
-        std::fstream file(fname, std::ios::binary | std::ios::in);
-#endif
         file.read((char*)ret_buffer.data(), file_size);
         return ret_buffer;
     }
@@ -184,13 +158,7 @@ private:
 
 inline std::string getExecutablePath()
 {
-#ifdef NVIGI_LINUX
-    char exePath[PATH_MAX] = {};
-    readlink("/proc/self/exe", exePath, sizeof(exePath));
-    std::string searchPathW = exePath;
-    searchPathW.erase(searchPathW.rfind('/'));
-    return searchPathW + "/";
-#else
+#ifdef NVIGI_WINDOWS
     CHAR pathAbsW[MAX_PATH] = {};
     GetModuleFileNameA(GetModuleHandleA(NULL), pathAbsW, ARRAYSIZE(pathAbsW));
     std::string searchPathW = pathAbsW;
@@ -625,7 +593,7 @@ int InitTTS(const std::string& modelDir, const std::string& ttsBackend,
     loggingPrint(nvigi::LogType::eInfo, "Initializing TTS\n");
 
     //! TTS Interface and Instance
-    nvigiCtx.ttsId = nvigi::plugin::tts::asqflow_trt::kId;
+    nvigiCtx.ttsId = nvigi::plugin::tts::asqflow_ggml::cuda::kId;
     if (ttsBackend == "cuda")
     {
         nvigiCtx.ttsId = nvigi::plugin::tts::asqflow_ggml::cuda::kId;
@@ -634,9 +602,9 @@ int InitTTS(const std::string& modelDir, const std::string& ttsBackend,
     {
         nvigiCtx.ttsId = nvigi::plugin::tts::asqflow_ggml::vulkan::kId;
     }
-    else if (ttsBackend != "trt")
+    else
     {
-        loggingPrint(nvigi::LogType::eWarn, ("Unknown tts backend '" + ttsBackend + "', defaulting to 'trt'\n").c_str());
+        loggingPrint(nvigi::LogType::eWarn, ("Unknown tts backend '" + ttsBackend + "', defaulting to 'cuda'\n").c_str());
     }
 
     if (NVIGI_FAILED(result, nvigiGetInterfaceDynamic(nvigiCtx.ttsId, &nvigiCtx.itts, ptr_nvigiLoadInterface)))
@@ -649,16 +617,9 @@ int InitTTS(const std::string& modelDir, const std::string& ttsBackend,
     std::string selectedGuid = guidTTS;
     if (selectedGuid.empty())
     {
-        if (nvigiCtx.ttsId == nvigi::plugin::tts::asqflow_trt::kId)
-        {
-            selectedGuid = "{81320D1D-DF3C-4CFC-B9FA-4D3FF95FC35F}";
-            loggingPrint(nvigi::LogType::eInfo, ("Auto-selecting TRT TTS model: " + selectedGuid + "\n").c_str());
-        }
-        else // GGML
-        {
-            selectedGuid = "{16EEB8EA-55A8-4F40-BECE-CE995AF44101}";
-            loggingPrint(nvigi::LogType::eInfo, ("Auto-selecting GGML TTS model: " + selectedGuid + "\n").c_str());
-        }
+        // GGML
+        selectedGuid = "{16EEB8EA-55A8-4F40-BECE-CE995AF44101}";
+        loggingPrint(nvigi::LogType::eInfo, ("Auto-selecting GGML TTS model: " + selectedGuid + "\n").c_str());
     }
 
     nvigi::TTSCreationParameters ttsParams{};
@@ -699,7 +660,6 @@ int InitTTS(const std::string& modelDir, const std::string& ttsBackend,
 int ReleaseTTS()
 {
     nvigiCtx.itts->destroyInstance(nvigiCtx.tts);
-    // Can be GGML or TRT
     if (NVIGI_FAILED(result, ptr_nvigiUnloadInterface(nvigiCtx.ttsId, nvigiCtx.itts)))
     {
         loggingPrint(nvigi::LogType::eError, "Error in 'nvigiUnloadInterface'");
@@ -970,8 +930,15 @@ int GPTInference(BasicCallbackCtx& cbkCtx, std::string& gptInputText)
     gptExecCtx.runtimeParameters = runtime;
 
     nvigi::InferenceDataTextSTLHelper text(gptInputText);
-    std::vector<nvigi::InferenceDataSlot> slots = {
-        {cbkCtx.conversationInitialized ? nvigi::kGPTDataSlotUser : nvigi::kGPTDataSlotSystem, text} };
+    std::string gptSystemText = "This is a transcript of a dialog between a user and a helpful AI assistant.\
+        Generate only medium size answers and avoid describing what you are doing physically.\
+        Avoid using specific words that are not part of the dictionary.\n";
+    nvigi::InferenceDataTextSTLHelper systemText(gptSystemText);
+    std::vector<nvigi::InferenceDataSlot> slots;
+    if (!cbkCtx.conversationInitialized) {
+        slots.push_back({ nvigi::kGPTDataSlotSystem, systemText });
+	}
+    slots.push_back({ nvigi::kGPTDataSlotUser, text });
     nvigi::InferenceDataSlotArray inputs = { slots.size(), slots.data() };
     gptExecCtx.inputs = &inputs;
 
@@ -1075,12 +1042,12 @@ int main(int argc, char** argv)
     parser.add_command("m", "models", " model repo location", "", true);
     parser.add_command("", "targetPathSpectrogram", " target path of the spectrogram of the voice you want to clone", "", true);
     parser.add_command("", "extendedPhonemeDict", " path to the extendend phonemes dictionary for ASqFlow TTS model", "", false);
-    parser.add_command("a", "audio", " audio file location", "", false); // used only for Linux
+    parser.add_command("a", "audio", " audio file location", "", false);
     parser.add_command("", "gpt", " gpt backend, 'cpu', 'cuda', 'vulkan', or 'cloud' (model GUID determines cloud endpoint)", "cuda");
     parser.add_command("", "gpt-guid", " gpt model guid in registry format", "{01F43B70-CE23-42CA-9606-74E80C5ED0B6}");
     parser.add_command("", "asr", " asr backend, 'cpu', 'cuda', or 'vulkan'", "cuda");
     parser.add_command("", "asr-guid", " asr model guid in registry format", "{5CAD3A03-1272-4D43-9F3D-655417526170}");
-    parser.add_command("", "tts", " tts backend, 'cuda', 'vulkan', or 'trt'", "trt");
+    parser.add_command("", "tts", " tts backend, 'cuda' or 'vulkan'", "cuda");
     parser.add_command("", "tts-guid", " tts model guid in registry format (auto-selected based on backend if not specified)", "");
     parser.add_command("t", "token", " authorization token for the cloud provider", "");
     parser.add_command("", "vram", " the amount of vram to use in MB", "8192");
@@ -1106,15 +1073,6 @@ int main(int argc, char** argv)
     auto extendedPhonemeDict = parser.get("extendedPhonemeDict");
     auto audioFile = parser.get("audio");
     size_t vramBudgetMB = (size_t)atoi(parser.get("vram").c_str());
-
-#ifdef NVIGI_LINUX
-    auto wav = read(audioFile.c_str());
-    if (wav.empty())
-    {
-        loggingPrint(nvigi::LogType::eError, "Could not load input WAV file");
-        return -1;
-    }
-#endif
 
     //////////////////////////////////////////////////////////////////////////////
     //! Init NVIGI
@@ -1154,14 +1112,10 @@ int main(int argc, char** argv)
         bool running = true;
         bool hasAudio = false;
         bool conversationInitialized = false;
-        std::string gptInputText = "This is a transcript of a dialog between a user and a helpful AI assistant.\
- Generate only medium size answers and avoid describing what you are doing physically.\
- Avoid using specific words that are not part of the dictionary.\n";
+        std::string gptInputText = "Hi - who are you?\n";
 
 #ifdef NVIGI_WINDOWS
         nvigi::InferenceDataAudioSTLHelper audioData;
-#else
-        nvigi::InferenceDataAudioSTLHelper audioData(wav);
 #endif
 
         do
@@ -1171,10 +1125,8 @@ int main(int argc, char** argv)
 
             conversationInitialized = true;
 
-#if NVIGI_WINDOWS
+#ifdef NVIGI_WINDOWS
             loggingPrint(nvigi::LogType::eInfo, "\n** Please continue the converation (enter with no text to start recording your query, 'q' or 'quit' to exit, any other text to type your query\n>:");
-#else
-            loggingPrint(nvigi::LogType::eInfo, "\n** Please continue the converation (enter with no text to use the wav file for prompt, 'q' or 'quit' to exit, any other text to type your query\n>:");
 #endif
 
             std::getline(std::cin, gptInputText);
@@ -1185,7 +1137,7 @@ int main(int argc, char** argv)
             }
             else if (gptInputText == "")
             {
-#if NVIGI_WINDOWS
+#ifdef NVIGI_WINDOWS
                 // Record audio
                 nvigi::utils::RecordingInfo* ri = nvigi::utils::startRecordingAudio();
                 loggingPrint(nvigi::LogType::eInfo, "Recording in progress: ask your question or comment and press enter to stop recording\n");

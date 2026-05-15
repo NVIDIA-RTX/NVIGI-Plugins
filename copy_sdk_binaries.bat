@@ -11,27 +11,32 @@ if "%Cfg%" NEQ "Release" (
 )
 
 cd %~dp0
-if not exist "bin\x64" mkdir bin\x64
+if not exist "bin\x64\%Cfg%" mkdir bin\x64\%Cfg%
 
-copy /Y nvigi_core\bin\%Cfg%_x64\*.dll bin\x64\
+REM nvigi_core layout: platform/config e.g. out\x64\%Cfg% or bin\x64\%Cfg%
+if exist "nvigi_core\out\x64\%Cfg%\" (
+    copy /Y nvigi_core\out\x64\%Cfg%\*.dll bin\x64\%Cfg%\
+) else (
+    copy /Y nvigi_core\bin\x64\%Cfg%\*.dll bin\x64\%Cfg%\
+)
 
 for /D %%b in ("_artifacts\*") do (
-    for %%c in ("%%~b\%Cfg%_x64\*.dll") do (
-        echo COPYING %%c to bin\x64\
-        copy %%c bin\x64\
+    for %%c in ("%%~b\x64\%Cfg%\*.dll") do (
+        echo COPYING %%c to bin\x64\%Cfg%\
+        copy %%c bin\x64\%Cfg%\
     )
-    for %%c in ("%%~b\%Cfg%_x64\*.exe") do (
-        echo COPYING %%c to bin\x64\
-        copy %%c bin\x64\
+    for %%c in ("%%~b\x64\%Cfg%\*.exe") do (
+        echo COPYING %%c to bin\x64\%Cfg%\
+        copy %%c bin\x64\%Cfg%\
     )
 )
 
 REM Custom for nvigi.3d
-for %%c in ("_artifacts\nvigi.3d\%Cfg%_x64\tts\*.*") do (
-    copy %%c bin\x64\
+for %%c in ("_artifacts\nvigi.3d\x64\%Cfg%\tts\*.*") do (
+    copy %%c bin\x64\%Cfg%\
 )
 
-robocopy /s _artifacts\nvigi.3d\%Cfg%_x64\shaders bin\x64\shaders
+robocopy /s _artifacts\nvigi.3d\x64\%Cfg%\shaders bin\x64\%Cfg%\shaders
 
 if not exist "source\plugins" goto :eof
 
